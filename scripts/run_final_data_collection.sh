@@ -16,6 +16,7 @@ BOOTSTRAP_BASELINE="${BOOTSTRAP_BASELINE:-2000}"
 MIN_EPISODES_PER_CELL="${MIN_EPISODES_PER_CELL:-100}"
 SUCCESS_AUDIT_MAX_TIMING_ALIGNED="${SUCCESS_AUDIT_MAX_TIMING_ALIGNED:-0.70}"
 CLEAN_OLD="${CLEAN_OLD:-1}"
+SKIP_TO_POST_SFT="${SKIP_TO_POST_SFT:-0}"
 RUN_API_BASELINE="${RUN_API_BASELINE:-0}"
 API_BASE_URL="${API_BASE_URL:-https://api.openai.com/v1/chat/completions}"
 API_KEY_ENV="${API_KEY_ENV:-OPENAI_API_KEY}"
@@ -134,99 +135,103 @@ fi
 
 mkdir -p "$RUN_DIR"/{data,baseline_runs,baseline_metrics,training_jobs/logs,checkpoint_eval,checkpoint_eval_holdouts,api_eval}
 
-run python -m scripts.generate_seed_tasks \
-  --output "$RUN_DIR/data/seed_tasks.jsonl" \
-  --tasks-per-domain "$TASKS_PER_DOMAIN" \
-  --seed "$SEED"
+if [[ "$SKIP_TO_POST_SFT" == "1" ]]; then
+  log "SKIP_TO_POST_SFT=1: skipping data generation/baselines/pair building/SFT and resuming at DPO."
+else
+  run python -m scripts.generate_seed_tasks \
+    --output "$RUN_DIR/data/seed_tasks.jsonl" \
+    --tasks-per-domain "$TASKS_PER_DOMAIN" \
+    --seed "$SEED"
 
-run python -m scripts.generate_variants \
-  --seed-tasks "$RUN_DIR/data/seed_tasks.jsonl" \
-  --output "$RUN_DIR/data/variant_tasks.jsonl" \
-  --seed "$SEED"
+  run python -m scripts.generate_variants \
+    --seed-tasks "$RUN_DIR/data/seed_tasks.jsonl" \
+    --output "$RUN_DIR/data/variant_tasks.jsonl" \
+    --seed "$SEED"
 
-run python -m scripts.create_generalization_splits \
-  --variants-path "$RUN_DIR/data/variant_tasks.jsonl" \
-  --output-dir "$RUN_DIR/data/generalization_splits" \
-  --heldout-delay-mechanisms stale_schema_cache,cross_tool_evidence_lag
+  run python -m scripts.create_generalization_splits \
+    --variants-path "$RUN_DIR/data/variant_tasks.jsonl" \
+    --output-dir "$RUN_DIR/data/generalization_splits" \
+    --heldout-delay-mechanisms stale_schema_cache,cross_tool_evidence_lag
 
-run python -m scripts.run_baselines \
-  --variants "$RUN_DIR/data/variant_tasks.jsonl" \
-  --output-dir "$RUN_DIR/baseline_runs" \
-  --split test \
-  --repeats "$BASELINE_REPEATS" \
-  --seed "$SEED" \
-  --max-scenarios "$MAX_SCENARIOS"
+  run python -m scripts.run_baselines \
+    --variants "$RUN_DIR/data/variant_tasks.jsonl" \
+    --output-dir "$RUN_DIR/baseline_runs" \
+    --split test \
+    --repeats "$BASELINE_REPEATS" \
+    --seed "$SEED" \
+    --max-scenarios "$MAX_SCENARIOS"
 
-run python -m scripts.evaluate_metrics \
-  --records-path "$RUN_DIR/baseline_runs/reliability_records.jsonl" \
-  --output-dir "$RUN_DIR/baseline_metrics" \
-  --bootstrap-resamples "$BOOTSTRAP_BASELINE" \
-  --seed "$SEED" \
-  --min-episodes-per-cell "$MIN_EPISODES_PER_CELL"
+  run python -m scripts.evaluate_metrics \
+    --records-path "$RUN_DIR/baseline_runs/reliability_records.jsonl" \
+    --output-dir "$RUN_DIR/baseline_metrics" \
+    --bootstrap-resamples "$BOOTSTRAP_BASELINE" \
+    --seed "$SEED" \
+    --min-episodes-per-cell "$MIN_EPISODES_PER_CELL"
 
-run python -m scripts.build_preference_pairs \
-  --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
-  --output "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
-  --include-commit-quality-pairs \
-  --target-commit-ratio 0.33 \
-  --target-commit-quality-ratio 0.34 \
-  --decision-window-turns 5 \
-  --min-quality-margin 0.05 \
-  --commit-chosen-policies defer_full,perfect_verifier_posttrain,clean_sft_only \
-  --commit-quality-chosen-policies defer_full,perfect_verifier_posttrain,clean_sft_only,runtime_verification_only
+  run python -m scripts.build_preference_pairs \
+    --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
+    --output "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
+    --include-commit-quality-pairs \
+    --target-commit-ratio 0.33 \
+    --target-commit-quality-ratio 0.34 \
+    --decision-window-turns 5 \
+    --min-quality-margin 0.05 \
+    --commit-chosen-policies defer_full,perfect_verifier_posttrain,clean_sft_only \
+    --commit-quality-chosen-policies defer_full,perfect_verifier_posttrain,clean_sft_only,runtime_verification_only
 
-run python -m scripts.build_success_preference_pairs \
-  --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
-  --output "$RUN_DIR/data/dpo_pairs_success_signal.jsonl" \
-  --target-timing-aligned-ratio 0.6
+  run python -m scripts.build_success_preference_pairs \
+    --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
+    --output "$RUN_DIR/data/dpo_pairs_success_signal.jsonl" \
+    --target-timing-aligned-ratio 0.6
 
-run python -m scripts.audit_success_pairs \
-  --pairs-path "$RUN_DIR/data/dpo_pairs_success_signal.jsonl" \
-  --output-dir "$RUN_DIR/data/success_pair_audit"
+  run python -m scripts.audit_success_pairs \
+    --pairs-path "$RUN_DIR/data/dpo_pairs_success_signal.jsonl" \
+    --output-dir "$RUN_DIR/data/success_pair_audit"
 
-assert_success_pair_audit
+  assert_success_pair_audit
 
-run python -m scripts.build_training_datasets \
-  --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
-  --pairs-path "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
-  --output-dir "$RUN_DIR/data/training_full" \
-  --seed "$SEED" \
-  --val-ratio 0.1
-
-run python -m scripts.build_training_datasets \
-  --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
-  --pairs-path "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
-  --output-dir "$RUN_DIR/data/training_delay_holdout_train" \
-  --seed "$SEED" \
-  --val-ratio 0.1 \
-  --exclude-delay-mechanisms stale_schema_cache,cross_tool_evidence_lag
-
-for d in calendar email rest sql; do
   run python -m scripts.build_training_datasets \
     --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
     --pairs-path "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
-    --output-dir "$RUN_DIR/data/training_domain_holdout_${d}" \
+    --output-dir "$RUN_DIR/data/training_full" \
+    --seed "$SEED" \
+    --val-ratio 0.1
+
+  run python -m scripts.build_training_datasets \
+    --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
+    --pairs-path "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
+    --output-dir "$RUN_DIR/data/training_delay_holdout_train" \
     --seed "$SEED" \
     --val-ratio 0.1 \
-    --exclude-domains "$d"
-done
+    --exclude-delay-mechanisms stale_schema_cache,cross_tool_evidence_lag
 
-run python -m scripts.build_training_datasets \
-  --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
-  --pairs-path "$RUN_DIR/data/dpo_pairs_success_signal.jsonl" \
-  --output-dir "$RUN_DIR/data/training_success_signal" \
-  --seed "$SEED" \
-  --val-ratio 0.1
+  for d in calendar email rest sql; do
+    run python -m scripts.build_training_datasets \
+      --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
+      --pairs-path "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
+      --output-dir "$RUN_DIR/data/training_domain_holdout_${d}" \
+      --seed "$SEED" \
+      --val-ratio 0.1 \
+      --exclude-domains "$d"
+  done
 
-run python -m scripts.train_sft \
-  --output-dir "$RUN_DIR/training_jobs/full_sft" \
-  --model-name "$BASE_MODEL" \
-  --train-path "$RUN_DIR/data/training_full/sft_train.jsonl" \
-  --val-path "$RUN_DIR/data/training_full/sft_val.jsonl" \
-  --seed "$SEED" \
-  --execute 2>&1 | tee "$RUN_DIR/training_jobs/logs/full_sft.log"
+  run python -m scripts.build_training_datasets \
+    --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
+    --pairs-path "$RUN_DIR/data/dpo_pairs_success_signal.jsonl" \
+    --output-dir "$RUN_DIR/data/training_success_signal" \
+    --seed "$SEED" \
+    --val-ratio 0.1
 
-check_sft_loss_trend
+  run python -m scripts.train_sft \
+    --output-dir "$RUN_DIR/training_jobs/full_sft" \
+    --model-name "$BASE_MODEL" \
+    --train-path "$RUN_DIR/data/training_full/sft_train.jsonl" \
+    --val-path "$RUN_DIR/data/training_full/sft_val.jsonl" \
+    --seed "$SEED" \
+    --execute 2>&1 | tee "$RUN_DIR/training_jobs/logs/full_sft.log"
+
+  check_sft_loss_trend
+fi
 
 run python -m scripts.train_dpo \
   --output-dir "$RUN_DIR/training_jobs/full_dpo_defer" \

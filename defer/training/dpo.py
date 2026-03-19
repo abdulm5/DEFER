@@ -41,7 +41,7 @@ def run_dpo_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         import torch
         from datasets import load_dataset
         from peft import LoraConfig
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         from trl import DPOConfig, DPOTrainer
     except ImportError as exc:  # pragma: no cover - exercised only with train extras installed
         raise RuntimeError(
@@ -139,44 +139,28 @@ def run_dpo_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
     elif "evaluation_strategy" in dpo_config_names:
         training_kwargs["evaluation_strategy"] = "epoch"
 
+    dpo_kwargs = dict(training_kwargs)
+    dpo_kwargs["beta"] = float(manifest["hyperparams"]["beta"])
+    if "max_length" in dpo_config_names:
+        dpo_kwargs["max_length"] = max_seq_len
+    if "max_prompt_length" in dpo_config_names:
+        dpo_kwargs["max_prompt_length"] = max_prompt_len
+    args = DPOConfig(**dpo_kwargs)
+
     trainer_signature = inspect.signature(DPOTrainer.__init__).parameters
+    trainer_kwargs: dict[str, Any] = {
+        "model": model,
+        "ref_model": None,
+        "args": args,
+        "train_dataset": dataset["train"],
+        "eval_dataset": dataset["validation"],
+        "peft_config": peft_config,
+    }
     if "processing_class" in trainer_signature:
-        dpo_kwargs = dict(training_kwargs)
-        dpo_kwargs["beta"] = float(manifest["hyperparams"]["beta"])
-        if "max_length" in dpo_config_names:
-            dpo_kwargs["max_length"] = max_seq_len
-        if "max_prompt_length" in dpo_config_names:
-            dpo_kwargs["max_prompt_length"] = max_prompt_len
-        args = DPOConfig(**dpo_kwargs)
-        trainer = DPOTrainer(
-            model=model,
-            ref_model=None,
-            args=args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset["validation"],
-            processing_class=tokenizer,
-            peft_config=peft_config,
-        )
-    else:
-        arg_names = inspect.signature(TrainingArguments.__init__).parameters
-        legacy_kwargs = dict(training_kwargs)
-        if "evaluation_strategy" in arg_names:
-            legacy_kwargs["evaluation_strategy"] = "epoch"
-        elif "eval_strategy" in arg_names:
-            legacy_kwargs["eval_strategy"] = "epoch"
-        args = TrainingArguments(**legacy_kwargs)
-        trainer = DPOTrainer(
-            model=model,
-            ref_model=None,
-            args=args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset["validation"],
-            tokenizer=tokenizer,
-            beta=float(manifest["hyperparams"]["beta"]),
-            max_length=max_seq_len,
-            max_prompt_length=max_prompt_len,
-            peft_config=peft_config,
-        )
+        trainer_kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in trainer_signature:
+        trainer_kwargs["tokenizer"] = tokenizer
+    trainer = DPOTrainer(**trainer_kwargs)
     train_result = trainer.train()
     trainer.save_model(str(output_dir / "model"))
     tokenizer.save_pretrained(str(output_dir / "model"))
