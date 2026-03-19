@@ -138,7 +138,9 @@ def run_sft_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         "save_strategy": "epoch",
         "report_to": [],
         "seed": seed,
-        "remove_unused_columns": False,
+        # Keep only model-ready token columns after TRL formatting/tokenization.
+        # Leaving raw `text` strings in batches can break torch collation.
+        "remove_unused_columns": True,
         "bf16": bool(torch.cuda.is_available()),
         "fp16": False,
     }
