@@ -78,8 +78,8 @@ def run_sft_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         tokenizer.pad_token = tokenizer.eos_token
 
     use_4bit = torch.cuda.is_available()
-    quantization_config = None
-    device_map = None
+    quantized_4bit = False
+    quantization_fallback_reason: str | None = None
     if use_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -87,13 +87,26 @@ def run_sft_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
-        device_map = "auto"
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=quantization_config,
-        device_map=device_map,
-    )
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                quantization_config=quantization_config,
+                device_map="auto",
+            )
+            quantized_4bit = True
+        except Exception as exc:
+            # Common incompatible stack path: accelerate dispatch calls `.to()` on a 4-bit model.
+            msg = str(exc)
+            if "not supported for `4-bit` or `8-bit` bitsandbytes models" not in msg:
+                raise
+            quantization_fallback_reason = msg
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+            )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_name)
 
     peft_config = LoraConfig(
         r=int(manifest["hyperparams"]["lora_r"]),
@@ -184,6 +197,8 @@ def run_sft_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         "effective_eval_batch_size": eval_batch_size,
         "effective_grad_accum_steps": grad_accum,
         "effective_max_seq_len": max_seq_len,
+        "quantized_4bit": quantized_4bit,
+        "quantization_fallback_reason": quantization_fallback_reason,
     }
     write_json(output_dir / "sft_train_summary.json", summary)
     return summary
