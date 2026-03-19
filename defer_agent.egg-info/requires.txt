@@ -1,0 +1,16 @@
+numpy==1.26.4
+pandas==2.2.2
+pydantic==2.8.2
+pyyaml==6.0.2
+
+[dev]
+pytest==8.3.2
+ruff==0.6.4
+mypy==1.11.2
+
+[train]
+torch==2.3.1
+transformers==4.44.2
+datasets==2.20.0
+peft==0.12.0
+trl==0.10.1

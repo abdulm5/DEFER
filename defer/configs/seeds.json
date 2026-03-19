@@ -1,0 +1,6 @@
+{
+  "primary_model_seeds": [11, 23, 37, 41, 53],
+  "confirmatory_model_seeds": [17, 29, 47],
+  "data_seed": 42,
+  "eval_seed": 42
+}

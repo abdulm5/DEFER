@@ -1,0 +1,18 @@
+[console_scripts]
+defer-audit-success-pairs = scripts.audit_success_pairs:main
+defer-build-pairs = scripts.build_preference_pairs:main
+defer-build-success-pairs = scripts.build_success_preference_pairs:main
+defer-build-training-data = scripts.build_training_datasets:main
+defer-evaluate = scripts.evaluate_metrics:main
+defer-generalization-splits = scripts.create_generalization_splits:main
+defer-generate-seeds = scripts.generate_seed_tasks:main
+defer-generate-variants = scripts.generate_variants:main
+defer-paper-collect = scripts.run_paper_data_collection:main
+defer-reproduce = scripts.reproduce:main
+defer-run-api-eval = scripts.run_api_eval:main
+defer-run-baselines = scripts.run_baselines:main
+defer-run-checkpoint-eval = scripts.run_checkpoint_eval:main
+defer-run-checkpoint-seed-sweep = scripts.run_checkpoint_seed_sweep:main
+defer-seed-sweep = scripts.run_seed_sweep:main
+defer-train-dpo = scripts.train_dpo:main
+defer-train-sft = scripts.train_sft:main

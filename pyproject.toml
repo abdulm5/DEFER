@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=70.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "defer-agent"
+version = "0.1.0"
+description = "DEFER: Calibrated deferral under uncertain verification and delayed truth revelation."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "DEFER Authors" }]
+dependencies = [
+  "numpy==1.26.4",
+  "pandas==2.2.2",
+  "pydantic==2.8.2",
+  "pyyaml==6.0.2",
+]
+
+[project.optional-dependencies]
+train = [
+  "torch==2.3.1",
+  "transformers==4.44.2",
+  "datasets==2.20.0",
+  "peft==0.12.0",
+  "trl==0.10.1",
+]
+dev = [
+  "pytest==8.3.2",
+  "ruff==0.6.4",
+  "mypy==1.11.2",
+]
+
+[project.scripts]
+defer-generate-seeds = "scripts.generate_seed_tasks:main"
+defer-generate-variants = "scripts.generate_variants:main"
+defer-run-baselines = "scripts.run_baselines:main"
+defer-run-checkpoint-eval = "scripts.run_checkpoint_eval:main"
+defer-run-checkpoint-seed-sweep = "scripts.run_checkpoint_seed_sweep:main"
+defer-run-api-eval = "scripts.run_api_eval:main"
+defer-seed-sweep = "scripts.run_seed_sweep:main"
+defer-evaluate = "scripts.evaluate_metrics:main"
+defer-reproduce = "scripts.reproduce:main"
+defer-paper-collect = "scripts.run_paper_data_collection:main"
+defer-build-training-data = "scripts.build_training_datasets:main"
+defer-build-pairs = "scripts.build_preference_pairs:main"
+defer-build-success-pairs = "scripts.build_success_preference_pairs:main"
+defer-audit-success-pairs = "scripts.audit_success_pairs:main"
+defer-train-sft = "scripts.train_sft:main"
+defer-train-dpo = "scripts.train_dpo:main"
+defer-generalization-splits = "scripts.create_generalization_splits:main"
+
+[tool.setuptools]
+packages = ["defer", "defer.core", "defer.domains", "defer.sim", "defer.stress", "defer.metrics", "defer.data", "defer.baselines", "defer.training", "defer.analysis", "defer.configs", "scripts"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

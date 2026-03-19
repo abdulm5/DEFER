@@ -1,0 +1,30 @@
+version: 1
+frozen_date: "2026-03-17"
+primary_metrics:
+  - AURS
+  - DCS
+  - gated_success
+  - IER
+  - EFV
+  - over_deferral_rate
+  - premature_commit_rate
+  - turn_budget_exhaustion
+comparisons:
+  - [defer_full, clean_sft_only]
+  - [defer_full, runtime_verification_only]
+  - [defer_full, perfect_verifier_posttrain]
+significance:
+  method: paired_cluster_bootstrap
+  alpha: 0.05
+  resamples: 10000
+  cluster_key: [seed, scenario_id]
+meaningful_effect_sizes:
+  DCS: 0.03
+  AURS: 0.015
+coverage_requirements:
+  min_episodes_per_condition_domain: 1000
+  min_episodes_per_surface_cell: 100
+appendix_breakdowns:
+  - by_domain
+  - by_scenario_category
+  - by_delay_mechanism

@@ -1,0 +1,26 @@
+{
+  "fault_profiles": [
+    {
+      "id": "fault_0.0",
+      "lambda_fault": 0.0,
+      "enabled": ["none"]
+    },
+    {
+      "id": "fault_0.1",
+      "lambda_fault": 0.1,
+      "enabled": ["timeout", "rate_limit", "partial_response", "schema_drift", "missing_field"]
+    },
+    {
+      "id": "fault_0.2",
+      "lambda_fault": 0.2,
+      "enabled": ["timeout", "rate_limit", "partial_response", "schema_drift", "missing_field"]
+    },
+    {
+      "id": "fault_0.3",
+      "lambda_fault": 0.3,
+      "enabled": ["timeout", "rate_limit", "partial_response", "schema_drift", "missing_field"]
+    }
+  ],
+  "epsilon_levels": [0.0, 0.1, 0.2, 0.3],
+  "delay_settings": ["immediate", "delayed"]
+}

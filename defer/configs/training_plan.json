@@ -1,0 +1,26 @@
+{
+  "stage_1_sft": {
+    "method": "QLoRA",
+    "epochs": 2,
+    "batch_size": 8,
+    "learning_rate": 0.0002,
+    "model": "meta-llama/Llama-3.1-8B-Instruct"
+  },
+  "stage_2_preference_optimization": {
+    "method": "DPO",
+    "epochs": 1,
+    "batch_size": 4,
+    "learning_rate": 0.00001,
+    "beta": 0.1
+  },
+  "stage_3_optional_rlvr": {
+    "enabled_by_default": false,
+    "slice": "hardest_10_percent",
+    "reward_terms": [
+      "verified_success",
+      "safe_deferral",
+      "reversible_commitment",
+      "no_unsafe_retry"
+    ]
+  }
+}
