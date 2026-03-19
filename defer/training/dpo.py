@@ -26,7 +26,11 @@ def build_dpo_manifest(
         "hyperparams": {
             "learning_rate": 1e-5,
             "epochs": 1,
-            "batch_size": 4,
+            # Keep DPO memory-bounded on commodity 24-48GB GPUs.
+            "batch_size": 1,
+            "gradient_accumulation_steps": 8,
+            "max_seq_len": 512,
+            "max_prompt_len": 256,
             "beta": 0.1,
             "seed": seed,
         },
@@ -109,13 +113,15 @@ def run_dpo_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         task_type="CAUSAL_LM",
     )
-    train_batch_size = int(manifest["hyperparams"]["batch_size"])
-    eval_batch_size = int(manifest["hyperparams"]["batch_size"])
-    max_seq_len = 1024
-    max_prompt_len = 384
+    train_batch_size = int(manifest["hyperparams"].get("batch_size", 1))
+    eval_batch_size = int(manifest["hyperparams"].get("batch_size", 1))
+    grad_accum = int(manifest["hyperparams"].get("gradient_accumulation_steps", 8))
+    max_seq_len = int(manifest["hyperparams"].get("max_seq_len", 512))
+    max_prompt_len = int(manifest["hyperparams"].get("max_prompt_len", 256))
     if is_mps:
         train_batch_size = min(train_batch_size, 1)
         eval_batch_size = min(eval_batch_size, 1)
+        grad_accum = max(grad_accum, 8)
         max_seq_len = 512
         max_prompt_len = 256
 
@@ -125,6 +131,7 @@ def run_dpo_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         "num_train_epochs": float(manifest["hyperparams"]["epochs"]),
         "per_device_train_batch_size": train_batch_size,
         "per_device_eval_batch_size": eval_batch_size,
+        "gradient_accumulation_steps": grad_accum,
         "logging_steps": 25,
         "save_strategy": "epoch",
         "report_to": [],
@@ -132,6 +139,7 @@ def run_dpo_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         "remove_unused_columns": False,
         "bf16": bool(torch.cuda.is_available()),
         "fp16": False,
+        "gradient_checkpointing": True,
     }
     dpo_config_names = inspect.signature(DPOConfig.__init__).parameters
     if "eval_strategy" in dpo_config_names:
@@ -174,6 +182,7 @@ def run_dpo_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
         "is_mps": is_mps,
         "effective_batch_size": train_batch_size,
         "effective_eval_batch_size": eval_batch_size,
+        "effective_grad_accum_steps": grad_accum,
         "effective_max_seq_len": max_seq_len,
         "effective_max_prompt_len": max_prompt_len,
         "quantized_4bit": quantized_4bit,
