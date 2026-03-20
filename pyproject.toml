@@ -50,6 +50,10 @@ defer-audit-success-pairs = "scripts.audit_success_pairs:main"
 defer-train-sft = "scripts.train_sft:main"
 defer-train-dpo = "scripts.train_dpo:main"
 defer-generalization-splits = "scripts.create_generalization_splits:main"
+defer-adversarial-eval = "scripts.run_adversarial_eval:main"
+defer-theory-comparison = "scripts.compute_theory_comparison:main"
+defer-prepare-human-eval = "scripts.prepare_human_eval:main"
+defer-analyze-human-eval = "scripts.analyze_human_eval:main"
 
 [tool.setuptools]
 packages = ["defer", "defer.core", "defer.domains", "defer.sim", "defer.stress", "defer.metrics", "defer.data", "defer.baselines", "defer.training", "defer.analysis", "defer.configs", "scripts"]

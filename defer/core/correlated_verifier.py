@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from defer.core.contracts import check_postconditions, check_preconditions
@@ -10,26 +12,36 @@ from defer.core.interfaces import (
     ContractSpec,
     Freshness,
     PendingPostconditionReason,
-    VerifierOutput,
     VerificationDecision,
+    VerifierOutput,
 )
+from defer.core.verifier import UncertainVerifier, VerifierConfig
 
 
 @dataclass(frozen=True)
-class VerifierConfig:
-    stale_probability: float = 0.2
-    provisional_probability: float = 0.25
-    contradiction_probability: float = 0.15
-    base_confidence: float = 0.9
-    stale_penalty: float = 0.25
-    provisional_penalty: float = 0.2
-    reject_penalty: float = 0.5
+class FailureProfile:
+    stale_prob: float
+    provisional_prob: float
+    contradiction_prob: float
 
 
-class UncertainVerifier:
-    def __init__(self, config: VerifierConfig | None = None, seed: int = 0) -> None:
-        self.config = config or VerifierConfig()
-        self._rng = random.Random(seed)
+@dataclass(frozen=True)
+class CorrelatedVerifierConfig:
+    base_config: VerifierConfig
+    failure_profiles: dict[tuple[str, str], FailureProfile] = field(default_factory=dict)
+    consecutive_provisional_stale_boost: float = 0.12
+    max_stale_boost: float = 0.40
+
+
+class CorrelatedVerifier(UncertainVerifier):
+    def __init__(
+        self,
+        config: CorrelatedVerifierConfig,
+        seed: int = 0,
+    ) -> None:
+        super().__init__(config=config.base_config, seed=seed)
+        self._correlated_config = config
+        self._consecutive_provisionals: int = 0
 
     def verify(
         self,
@@ -41,15 +53,22 @@ class UncertainVerifier:
         delayed_truth_category: str | None = None,
     ) -> VerifierOutput:
         pending_fields = pending_fields or []
+        effective = self._effective_probabilities(fault_mode, delayed_truth_category)
+        stale_prob = self._apply_consecutive_boost(effective.stale_prob)
 
         pre_failures = check_preconditions(contract, pre_state)
         post_failures = check_postconditions(contract, post_state)
-        freshness = self._sample_freshness()
+        freshness = (
+            Freshness.STALE if self._rng.random() < stale_prob else Freshness.FRESH
+        )
 
         if pre_failures or post_failures:
-            confidence = max(0.0, self.config.base_confidence - self.config.reject_penalty)
+            confidence = max(
+                0.0, self.config.base_confidence - self.config.reject_penalty
+            )
             if freshness == Freshness.STALE:
                 confidence = max(0.0, confidence - self.config.stale_penalty)
+            self._consecutive_provisionals = 0
             return VerifierOutput(
                 decision=VerificationDecision.REJECT,
                 confidence=round(confidence, 4),
@@ -59,7 +78,7 @@ class UncertainVerifier:
                 evidence_ids=sorted(set(pre_failures + post_failures)),
             )
 
-        if pending_fields or self._rng.random() < self.config.provisional_probability:
+        if pending_fields or self._rng.random() < effective.provisional_prob:
             reason = self._provisional_reason(
                 pending_fields=pending_fields,
                 freshness=freshness,
@@ -71,6 +90,7 @@ class UncertainVerifier:
                 - self.config.provisional_penalty
                 - (self.config.stale_penalty if freshness == Freshness.STALE else 0.0),
             )
+            self._consecutive_provisionals += 1
             return VerifierOutput(
                 decision=VerificationDecision.PROVISIONAL,
                 confidence=round(confidence, 4),
@@ -83,6 +103,7 @@ class UncertainVerifier:
         confidence = self.config.base_confidence
         if freshness == Freshness.STALE:
             confidence = max(0.0, confidence - self.config.stale_penalty)
+        self._consecutive_provisionals = 0
         return VerifierOutput(
             decision=VerificationDecision.ACCEPT,
             confidence=round(confidence, 4),
@@ -97,62 +118,49 @@ class UncertainVerifier:
         fault_mode: str | None = None,
         delayed_truth_category: str | None = None,
     ) -> tuple[bool, ContradictionSource | None]:
-        contradicted = self._rng.random() < self.config.contradiction_probability
+        effective = self._effective_probabilities(fault_mode, delayed_truth_category)
+        contradicted = self._rng.random() < effective.contradiction_prob
         if not contradicted:
             return False, None
         return True, self._sample_contradiction_source(
             fault_mode=fault_mode, delayed_truth_category=delayed_truth_category
         )
 
-    def _sample_freshness(self) -> Freshness:
-        return (
-            Freshness.STALE
-            if self._rng.random() < self.config.stale_probability
-            else Freshness.FRESH
-        )
-
-    def _provisional_reason(
-        self,
-        pending_fields: list[str],
-        freshness: Freshness,
-        fault_mode: str | None,
-    ) -> PendingPostconditionReason:
-        if pending_fields:
-            return PendingPostconditionReason.DELAYED_SIDE_EFFECT_NOT_OBSERVED
-        if fault_mode == "schema_drift":
-            return PendingPostconditionReason.STALE_SCHEMA
-        if fault_mode == "partial_response":
-            return PendingPostconditionReason.PARTIAL_OUTPUT
-        if freshness == Freshness.STALE:
-            return PendingPostconditionReason.STALE_SCHEMA
-        if fault_mode in {"rate_limit", "timeout"}:
-            return PendingPostconditionReason.EXTERNAL_STATE_MAY_CHANGE
-        return PendingPostconditionReason.UNKNOWN
-
-    def _sample_contradiction_source(
+    def _effective_probabilities(
         self,
         fault_mode: str | None,
         delayed_truth_category: str | None,
-    ) -> ContradictionSource:
-        if fault_mode == "schema_drift":
-            return ContradictionSource.SCHEMA_CONFLICT
-        if fault_mode == "partial_response":
-            return ContradictionSource.CROSS_TOOL_MISMATCH
-        if fault_mode in {"timeout", "rate_limit"}:
-            return ContradictionSource.DELAYED_JOB_RESOLUTION
-        if delayed_truth_category == "C":
-            return self._rng.choice(
-                [
-                    ContradictionSource.CONCURRENT_EDIT,
-                    ContradictionSource.CROSS_TOOL_MISMATCH,
-                    ContradictionSource.STALE_CACHE_REVEAL,
-                ]
-            )
-        if delayed_truth_category == "B":
-            return self._rng.choice(
-                [
-                    ContradictionSource.DELAYED_JOB_RESOLUTION,
-                    ContradictionSource.STALE_CACHE_REVEAL,
-                ]
-            )
-        return ContradictionSource.UNKNOWN
+    ) -> FailureProfile:
+        key = (fault_mode or "none", delayed_truth_category or "A")
+        profile = self._correlated_config.failure_profiles.get(key)
+        if profile is not None:
+            return profile
+        return FailureProfile(
+            stale_prob=self.config.stale_probability,
+            provisional_prob=self.config.provisional_probability,
+            contradiction_prob=self.config.contradiction_probability,
+        )
+
+    def _apply_consecutive_boost(self, base_stale_prob: float) -> float:
+        boost = (
+            self._correlated_config.consecutive_provisional_stale_boost
+            * self._consecutive_provisionals
+        )
+        boost = min(boost, self._correlated_config.max_stale_boost)
+        return min(0.95, base_stale_prob + boost)
+
+
+def load_failure_profiles(path: Path) -> dict[tuple[str, str], FailureProfile]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    profiles: dict[tuple[str, str], FailureProfile] = {}
+    for key_str, triple in raw.items():
+        parts = key_str.split("|", 1)
+        if len(parts) != 2:
+            continue
+        fault_mode, category = parts
+        profiles[(fault_mode, category)] = FailureProfile(
+            stale_prob=triple[0],
+            provisional_prob=triple[1],
+            contradiction_prob=triple[2],
+        )
+    return profiles

@@ -1,19 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 from typing import Any
 
 from defer.domains.state import ApiResource, CalendarEvent, EmailMessage, SqlRow, WorldState
-
-
-@dataclass
-class ToolExecutionResult:
-    ok: bool
-    observation: dict[str, Any]
-    state_diff: dict[str, Any]
-    pending_fields: list[str]
-    irreversible_commit: bool
+from defer.domains.types import ToolExecutionResult
 
 
 def create_calendar_event(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
@@ -100,10 +91,13 @@ def refresh_state(state: WorldState, args: dict[str, Any]) -> ToolExecutionResul
     )
 
 
+from defer.domains.extended_tools import EXTENDED_TOOLS
+
 TOOLS = {
     "create_calendar_event": create_calendar_event,
     "send_email": send_email,
     "upsert_api_resource": upsert_api_resource,
     "upsert_sql_row": upsert_sql_row,
     "refresh_state": refresh_state,
+    **EXTENDED_TOOLS,
 }

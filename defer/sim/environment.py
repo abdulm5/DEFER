@@ -5,6 +5,7 @@ import hashlib
 import math
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from defer.baselines.policies import Policy
@@ -20,6 +21,11 @@ from defer.core.interfaces import (
     ToolCall,
     VerificationDecision,
 )
+from defer.core.correlated_verifier import (
+    CorrelatedVerifier,
+    CorrelatedVerifierConfig,
+    load_failure_profiles,
+)
 from defer.core.verifier import UncertainVerifier, VerifierConfig
 from defer.domains.contracts import default_contracts
 from defer.domains.state import WorldState
@@ -30,6 +36,9 @@ from defer.stress.faults import FaultInjector, FaultProfile
 from defer.stress.perturb import perturb_prompt
 
 
+_DEFAULT_PROFILES_PATH = Path(__file__).resolve().parent.parent / "configs" / "failure_profiles.json"
+
+
 @dataclass(frozen=True)
 class EnvironmentConfig:
     max_turns: int = 4
@@ -38,6 +47,7 @@ class EnvironmentConfig:
     stale_probability: float = 0.2
     provisional_probability: float = 0.25
     contradiction_probability: float = 0.15
+    use_correlated_verifier: bool = False
 
 
 def _scenario_hash_to_id(scenario: Scenario, seed: int) -> str:
@@ -70,10 +80,11 @@ class SimulationEnvironment:
             epsilon=epsilon,
             lambda_fault=lambda_fault,
         )
-        verifier = UncertainVerifier(
-            verifier_config,
-            seed=episode_seed,
-        )
+        if self.config.use_correlated_verifier:
+            correlated_config = self._build_correlated_config(verifier_config)
+            verifier = CorrelatedVerifier(correlated_config, seed=episode_seed)
+        else:
+            verifier = UncertainVerifier(verifier_config, seed=episode_seed)
         fault_injector = FaultInjector(FaultProfile(lambda_fault=lambda_fault), seed=episode_seed + 7)
         event_loop = EventLoop()
         state = WorldState()
@@ -215,6 +226,7 @@ class SimulationEnvironment:
                 post_state=post_state,
                 pending_fields=result.pending_fields if scenario.has_delayed_truth else [],
                 fault_mode=fault,
+                delayed_truth_category=scenario_category,
             )
             turn.verifier_output = verifier_output
             turn.observation = {**result.observation, "fault": fault}
@@ -387,6 +399,16 @@ class SimulationEnvironment:
             stale_penalty=0.25,
             provisional_penalty=0.2,
             reject_penalty=0.5,
+        )
+
+    def _build_correlated_config(
+        self, base_config: VerifierConfig
+    ) -> CorrelatedVerifierConfig:
+        profiles_path = _DEFAULT_PROFILES_PATH
+        profiles = load_failure_profiles(profiles_path) if profiles_path.exists() else {}
+        return CorrelatedVerifierConfig(
+            base_config=base_config,
+            failure_profiles=profiles,
         )
 
     @staticmethod

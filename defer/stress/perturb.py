@@ -9,6 +9,13 @@ PARAPHRASE_MAP = {
     "urgent": ["high-priority", "time-sensitive"],
     "confirm": ["validate", "double-check"],
     "database": ["db", "data store"],
+    "webhook": ["callback", "hook", "listener"],
+    "upload": ["transfer", "push", "send"],
+    "permission": ["access", "authorization", "privilege"],
+    "notification": ["alert", "message", "ping"],
+    "grant": ["allow", "authorize", "permit"],
+    "file": ["document", "artifact", "attachment"],
+    "deploy": ["release", "ship", "push"],
 }
 
 

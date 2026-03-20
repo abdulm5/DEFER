@@ -1,0 +1,20 @@
+{
+  "none|A": [0.15, 0.20, 0.10],
+  "none|B": [0.22, 0.30, 0.18],
+  "none|C": [0.30, 0.38, 0.25],
+  "timeout|A": [0.20, 0.28, 0.12],
+  "timeout|B": [0.28, 0.35, 0.20],
+  "timeout|C": [0.38, 0.45, 0.30],
+  "rate_limit|A": [0.18, 0.25, 0.12],
+  "rate_limit|B": [0.25, 0.32, 0.18],
+  "rate_limit|C": [0.35, 0.42, 0.28],
+  "schema_drift|A": [0.25, 0.30, 0.20],
+  "schema_drift|B": [0.35, 0.42, 0.28],
+  "schema_drift|C": [0.45, 0.50, 0.35],
+  "missing_field|A": [0.20, 0.28, 0.15],
+  "missing_field|B": [0.30, 0.38, 0.22],
+  "missing_field|C": [0.40, 0.48, 0.32],
+  "partial_response|A": [0.22, 0.30, 0.15],
+  "partial_response|B": [0.32, 0.40, 0.22],
+  "partial_response|C": [0.42, 0.48, 0.32]
+}

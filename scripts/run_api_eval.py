@@ -88,6 +88,7 @@ def run(
     temperature: float = 0.0,
     top_p: float = 1.0,
     timeout_seconds: int = 60,
+    system_prompt_override: str | None = None,
 ) -> None:
     if not api_policies:
         raise ValueError("At least one --api-policy name=model_id is required.")
@@ -119,9 +120,17 @@ def run(
             raise ValueError(f"Unknown baseline policy: {baseline_name}")
         policies.append(registry[baseline_name])
 
+    system_prompt_map: dict[str, str] = {}
+    if system_prompt_override == "prompted_deferral":
+        from defer.baselines.prompted_deferral_policy import PROMPTED_DEFERRAL_SYSTEM_PROMPT
+        system_prompt_map["prompted_deferral"] = PROMPTED_DEFERRAL_SYSTEM_PROMPT
+
     policy_stats: dict[str, dict] = {}
     for name, model in _parse_api_specs(api_policies):
         fallback = registry.get(name, registry[fallback_policy_name])
+        extra_kwargs: dict = {}
+        if name in system_prompt_map:
+            extra_kwargs["system_prompt"] = system_prompt_map[name]
         policy = OpenAIChatPolicy(
             name=name,
             model=model,
@@ -134,6 +143,7 @@ def run(
                 top_p=top_p,
                 timeout_seconds=timeout_seconds,
             ),
+            **extra_kwargs,
         )
         policies.append(policy)
         policy_stats[name] = {"model": model, "fallback_policy": fallback.name}
@@ -234,6 +244,12 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--timeout-seconds", type=int, default=60)
+    parser.add_argument(
+        "--system-prompt-override",
+        type=str,
+        default=None,
+        help="Override system prompt for matching policy name. E.g. 'prompted_deferral'.",
+    )
     args = parser.parse_args()
     domains = {d.strip() for d in args.domains.split(",") if d.strip()} or None
     include_delay_mechanisms = (
@@ -262,6 +278,7 @@ def main() -> None:
         temperature=args.temperature,
         top_p=args.top_p,
         timeout_seconds=args.timeout_seconds,
+        system_prompt_override=args.system_prompt_override,
     )
 
 

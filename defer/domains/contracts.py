@@ -49,4 +49,42 @@ def default_contracts() -> dict[str, ContractSpec]:
             refresh_tools=[],
             failure_modes=[],
         ),
+        **extended_contracts(),
+    }
+
+
+def extended_contracts() -> dict[str, ContractSpec]:
+    return {
+        "register_webhook": ContractSpec(
+            tool_name="register_webhook",
+            preconditions=[{"field": "user_authorized", "op": "eq", "value": True}],
+            postconditions=[{"field": "webhooks", "op": "exists"}],
+            side_effect_type=SideEffectType.REVERSIBLE,
+            refresh_tools=["refresh_state"],
+            failure_modes=["timeout", "rate_limit", "partial_response", "schema_drift"],
+        ),
+        "upload_file": ContractSpec(
+            tool_name="upload_file",
+            preconditions=[{"field": "user_authorized", "op": "eq", "value": True}],
+            postconditions=[{"field": "stored_files", "op": "exists"}],
+            side_effect_type=SideEffectType.IRREVERSIBLE,
+            refresh_tools=["refresh_state"],
+            failure_modes=["timeout", "rate_limit", "partial_response"],
+        ),
+        "modify_access": ContractSpec(
+            tool_name="modify_access",
+            preconditions=[{"field": "user_authorized", "op": "eq", "value": True}],
+            postconditions=[{"field": "access_grants", "op": "exists"}],
+            side_effect_type=SideEffectType.IRREVERSIBLE,
+            refresh_tools=["refresh_state"],
+            failure_modes=["timeout", "schema_drift", "missing_field", "partial_response"],
+        ),
+        "send_notification": ContractSpec(
+            tool_name="send_notification",
+            preconditions=[{"field": "user_authorized", "op": "eq", "value": True}],
+            postconditions=[{"field": "notifications", "op": "exists"}],
+            side_effect_type=SideEffectType.IRREVERSIBLE,
+            refresh_tools=["refresh_state"],
+            failure_modes=["timeout", "rate_limit", "partial_response", "schema_drift"],
+        ),
     }

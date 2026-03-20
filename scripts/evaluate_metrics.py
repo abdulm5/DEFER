@@ -353,6 +353,9 @@ def _pairwise_significance(
         ("defer_full", "clean_sft_only"),
         ("defer_full", "runtime_verification_only"),
         ("defer_full", "perfect_verifier_posttrain"),
+        ("defer_full", "success_signal_posttrain"),
+        ("defer_full", "prompted_deferral"),
+        ("success_signal_posttrain", "clean_sft_only"),
     ]
 
     def cluster_key(record: ReliabilityRecord) -> tuple[int, str]:

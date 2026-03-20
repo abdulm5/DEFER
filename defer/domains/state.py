@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from defer.domains.extended_state import (
+    AccessGrant,
+    NotificationRecord,
+    StoredFile,
+    WebhookEndpoint,
+)
+
 
 class CalendarEvent(BaseModel):
     event_id: str
@@ -39,6 +46,10 @@ class WorldState(BaseModel):
     emails: dict[str, EmailMessage] = Field(default_factory=dict)
     api_resources: dict[str, ApiResource] = Field(default_factory=dict)
     sql_rows: dict[str, SqlRow] = Field(default_factory=dict)
+    webhooks: dict[str, WebhookEndpoint] = Field(default_factory=dict)
+    stored_files: dict[str, StoredFile] = Field(default_factory=dict)
+    access_grants: dict[str, AccessGrant] = Field(default_factory=dict)
+    notifications: dict[str, NotificationRecord] = Field(default_factory=dict)
     stale_cache: dict[str, str] = Field(default_factory=dict)
     pending_jobs: dict[str, dict] = Field(default_factory=dict)
     collaborator_edits: list[dict] = Field(default_factory=list)

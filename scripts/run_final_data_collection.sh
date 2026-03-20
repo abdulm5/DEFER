@@ -205,7 +205,7 @@ else
     --val-ratio 0.1 \
     --exclude-delay-mechanisms stale_schema_cache,cross_tool_evidence_lag
 
-  for d in calendar email rest sql; do
+  for d in calendar email rest sql webhook file_storage access_control notification; do
     run python -m scripts.build_training_datasets \
       --traces-path "$RUN_DIR/baseline_runs/episode_traces.jsonl" \
       --pairs-path "$RUN_DIR/data/dpo_pairs_triple_mix.jsonl" \
@@ -280,7 +280,7 @@ run python -m scripts.train_dpo \
   --mode dpo \
   --execute 2>&1 | tee "$RUN_DIR/training_jobs/logs/delay_holdout_dpo_defer.log"
 
-for d in calendar email rest sql; do
+for d in calendar email rest sql webhook file_storage access_control notification; do
   run python -m scripts.train_sft \
     --output-dir "$RUN_DIR/training_jobs/domain_holdout_${d}_sft" \
     --model-name "$BASE_MODEL" \
@@ -352,7 +352,8 @@ run python -m scripts.run_checkpoint_eval \
   --max-scenarios "$MAX_SCENARIOS" \
   --include-baselines runtime_verification_only \
   --model-policy defer_full="$RUN_DIR/training_jobs/full_dpo_defer/model" \
-  --model-policy defer_delay_holdout="$RUN_DIR/training_jobs/delay_holdout_dpo_defer/model"
+  --model-policy defer_delay_holdout="$RUN_DIR/training_jobs/delay_holdout_dpo_defer/model" \
+  --model-policy success_signal_posttrain="$RUN_DIR/training_jobs/full_dpo_success_signal/model"
 
 run python -m scripts.evaluate_metrics \
   --records-path "$RUN_DIR/checkpoint_eval_holdouts/delay/reliability_records.jsonl" \
@@ -362,7 +363,7 @@ run python -m scripts.evaluate_metrics \
   --min-episodes-per-cell "$MIN_EPISODES_PER_CELL" \
   --fallback-metrics-path "$RUN_DIR/checkpoint_eval_holdouts/delay/fallback_metrics.csv"
 
-for d in calendar email rest sql; do
+for d in calendar email rest sql webhook file_storage access_control notification; do
   run python -m scripts.run_checkpoint_eval \
     --variants "$RUN_DIR/data/generalization_splits/domain_holdout/${d}_eval_variants.jsonl" \
     --output-dir "$RUN_DIR/checkpoint_eval_holdouts/domain_${d}" \
@@ -372,7 +373,8 @@ for d in calendar email rest sql; do
     --max-scenarios "$MAX_SCENARIOS" \
     --include-baselines runtime_verification_only \
     --model-policy defer_full="$RUN_DIR/training_jobs/full_dpo_defer/model" \
-    --model-policy defer_domain_holdout="$RUN_DIR/training_jobs/domain_holdout_${d}_dpo_defer/model"
+    --model-policy defer_domain_holdout="$RUN_DIR/training_jobs/domain_holdout_${d}_dpo_defer/model" \
+    --model-policy success_signal_posttrain="$RUN_DIR/training_jobs/full_dpo_success_signal/model"
 
   run python -m scripts.evaluate_metrics \
     --records-path "$RUN_DIR/checkpoint_eval_holdouts/domain_${d}/reliability_records.jsonl" \
@@ -382,6 +384,33 @@ for d in calendar email rest sql; do
     --min-episodes-per-cell "$MIN_EPISODES_PER_CELL" \
     --fallback-metrics-path "$RUN_DIR/checkpoint_eval_holdouts/domain_${d}/fallback_metrics.csv"
 done
+
+# Adversarial evaluation
+run python -m scripts.run_adversarial_eval \
+  --output-dir "$RUN_DIR/checkpoint_eval/adversarial" \
+  --repeats "$EVAL_REPEATS" --seed "$SEED" --max-scenarios 200 \
+  --include-baselines runtime_verification_only,react \
+  --model-policy defer_full="$RUN_DIR/training_jobs/full_dpo_defer/model" \
+  --model-policy success_signal_posttrain="$RUN_DIR/training_jobs/full_dpo_success_signal/model"
+
+run python -m scripts.evaluate_metrics \
+  --records-path "$RUN_DIR/checkpoint_eval/adversarial/reliability_records.jsonl" \
+  --output-dir "$RUN_DIR/checkpoint_eval/adversarial_metrics" \
+  --bootstrap-resamples "$BOOTSTRAP_MAIN" \
+  --seed "$SEED" \
+  --min-episodes-per-cell 10 \
+  --fallback-metrics-path "$RUN_DIR/checkpoint_eval/adversarial/fallback_metrics.csv"
+
+# Theory comparison
+run python -m scripts.compute_theory_comparison \
+  --records-path "$RUN_DIR/checkpoint_eval/main/reliability_records.jsonl" \
+  --output-dir "$RUN_DIR/checkpoint_eval/theory" \
+  --policy-name defer_full
+
+# Human evaluation preparation
+run python -m scripts.prepare_human_eval \
+  --traces-path "$RUN_DIR/checkpoint_eval/main/episode_traces.jsonl" \
+  --output-dir "$RUN_DIR/human_eval" --n-traces 100 --seed "$SEED"
 
 if [[ "$RUN_API_BASELINE" == "1" ]]; then
   if [[ -z "${!API_KEY_ENV:-}" ]]; then
@@ -406,6 +435,26 @@ if [[ "$RUN_API_BASELINE" == "1" ]]; then
       --seed "$SEED" \
       --min-episodes-per-cell "$MIN_EPISODES_PER_CELL" \
       --fallback-metrics-path "$RUN_DIR/api_eval/openai_main/fallback_metrics.csv"
+
+    # Prompted deferral baseline
+    run python -m scripts.run_api_eval \
+      --variants "$RUN_DIR/data/variant_tasks.jsonl" \
+      --output-dir "$RUN_DIR/api_eval/prompted_deferral" \
+      --split test --repeats "$API_REPEATS" --seed "$SEED" \
+      --max-scenarios "$API_MAX_SCENARIOS" \
+      --include-baselines runtime_verification_only \
+      --api-key-env "$API_KEY_ENV" \
+      --base-url "$API_BASE_URL" \
+      --api-policy "prompted_deferral=${API_MODEL}" \
+      --system-prompt-override prompted_deferral
+
+    run python -m scripts.evaluate_metrics \
+      --records-path "$RUN_DIR/api_eval/prompted_deferral/reliability_records.jsonl" \
+      --output-dir "$RUN_DIR/api_eval/prompted_deferral_metrics" \
+      --bootstrap-resamples 5000 \
+      --seed "$SEED" \
+      --min-episodes-per-cell "$MIN_EPISODES_PER_CELL" \
+      --fallback-metrics-path "$RUN_DIR/api_eval/prompted_deferral/fallback_metrics.csv"
   fi
 fi
 
