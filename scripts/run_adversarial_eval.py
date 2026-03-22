@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 from pathlib import Path
 
 from defer.baselines.runner import RunnerConfig, run_policies
@@ -12,6 +13,19 @@ from defer.sim.adversarial_scenarios import (
 )
 
 import csv
+
+
+def _release_model_policy(policy) -> None:
+    for attr in ("model", "tokenizer"):
+        if hasattr(policy, attr):
+            delattr(policy, attr)
+    gc.collect()
+    try:
+        import torch
+    except Exception:  # pragma: no cover
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def run(
@@ -26,23 +40,44 @@ def run(
     scenarios = generate_adversarial_scenarios(config)
 
     registry = policy_registry()
-    policies = []
+    policy_names: list[str] = []
+    traces = []
+    records = []
     for baseline_name in include_baselines:
         if baseline_name in registry:
-            policies.append(registry[baseline_name])
+            policy_names.append(baseline_name)
 
+    baseline_policies = [registry[name] for name in policy_names]
+    if baseline_policies:
+        baseline_traces, baseline_records = run_policies(
+            scenarios=scenarios,
+            policies=baseline_policies,
+            config=RunnerConfig(repeats=repeats, seed=seed),
+        )
+        traces.extend(baseline_traces)
+        records.extend(baseline_records)
+
+    model_stats: dict[str, dict] = {}
     if model_policies:
         from defer.baselines.model_policy import HFCheckpointPolicy
 
         for name, path in model_policies.items():
+            if not Path(path).exists():
+                raise FileNotFoundError(f"Checkpoint path for policy '{name}' does not exist: {path}")
             fallback = registry.get("runtime_verification_only", list(registry.values())[0])
-            policies.append(HFCheckpointPolicy(name=name, checkpoint_path=path, fallback_policy=fallback))
-
-    traces, records = run_policies(
-        scenarios=scenarios,
-        policies=policies,
-        config=RunnerConfig(repeats=repeats, seed=seed),
-    )
+            policy_names.append(name)
+            policy = HFCheckpointPolicy(name=name, checkpoint_path=path, fallback_policy=fallback)
+            try:
+                model_traces, model_records = run_policies(
+                    scenarios=scenarios,
+                    policies=[policy],
+                    config=RunnerConfig(repeats=repeats, seed=seed),
+                )
+                traces.extend(model_traces)
+                records.extend(model_records)
+                model_stats[name] = policy.stats()
+            finally:
+                _release_model_policy(policy)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(
@@ -54,19 +89,27 @@ def run(
         [record.model_dump(mode="json") for record in records],
     )
 
+    decision_counts: dict[str, int] = {}
+    for trace in traces:
+        decision_counts[trace.policy_name] = decision_counts.get(trace.policy_name, 0) + len(trace.turns)
     fallback_rows = []
-    for policy in policies:
-        fallback_rows.append(
-            {
-                "policy": policy.name,
-                "total_decisions": sum(
-                    len(t.turns) for t in traces if t.policy_name == policy.name
-                ),
-                "parse_failures": 0,
-                "fallback_calls": 0,
-                "fallback_rate": 0.0,
-            }
+    for policy_name in policy_names:
+        stats = model_stats.get(policy_name, {})
+        parse_failures = int(stats.get("parse_failures", 0))
+        fallback_calls = int(stats.get("fallback_calls", 0))
+        total_decisions = int(stats.get("total_decisions", decision_counts.get(policy_name, 0)))
+        fallback_rate = (
+            float(stats.get("parse_failure_rate"))
+            if "parse_failure_rate" in stats
+            else (parse_failures / max(1, total_decisions))
         )
+        fallback_rows.append({
+            "policy": policy_name,
+            "total_decisions": total_decisions,
+            "parse_failures": parse_failures,
+            "fallback_calls": fallback_calls,
+            "fallback_rate": fallback_rate,
+        })
     fallback_path = output_dir / "fallback_metrics.csv"
     with fallback_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
@@ -83,7 +126,7 @@ def run(
             "scenarios": len(scenarios),
             "repeats": repeats,
             "seed": seed,
-            "policies": [p.name for p in policies],
+            "policies": policy_names,
             "traces": len(traces),
             "records": len(records),
         },

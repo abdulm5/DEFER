@@ -8,13 +8,16 @@ RUN_DIR="${RUN_DIR:-artifacts/final_run_v1}"
 TASKS_PER_DOMAIN="${TASKS_PER_DOMAIN:-300}"
 BASELINE_REPEATS="${BASELINE_REPEATS:-3}"
 EVAL_REPEATS="${EVAL_REPEATS:-5}"
-MAX_SCENARIOS="${MAX_SCENARIOS:-2000}"
+MAX_SCENARIOS="${MAX_SCENARIOS:-3000}"
 SEED="${SEED:-42}"
+BASELINE_SPLIT="${BASELINE_SPLIT:-train}"
+EVAL_SPLIT="${EVAL_SPLIT:-test}"
 BASE_MODEL="${BASE_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 BOOTSTRAP_MAIN="${BOOTSTRAP_MAIN:-10000}"
 BOOTSTRAP_BASELINE="${BOOTSTRAP_BASELINE:-2000}"
 MIN_EPISODES_PER_CELL="${MIN_EPISODES_PER_CELL:-100}"
 SUCCESS_AUDIT_MAX_TIMING_ALIGNED="${SUCCESS_AUDIT_MAX_TIMING_ALIGNED:-0.70}"
+MAX_FALLBACK_RATE="${MAX_FALLBACK_RATE:-0.10}"
 CLEAN_OLD="${CLEAN_OLD:-1}"
 SKIP_TO_POST_SFT="${SKIP_TO_POST_SFT:-0}"
 RUN_API_BASELINE="${RUN_API_BASELINE:-0}"
@@ -24,6 +27,12 @@ API_MODEL="${API_MODEL:-gpt-4o}"
 API_POLICY_NAME="${API_POLICY_NAME:-frontier_zero_shot}"
 API_REPEATS="${API_REPEATS:-3}"
 API_MAX_SCENARIOS="${API_MAX_SCENARIOS:-1000}"
+TRAIN_SEED_SWEEP="${TRAIN_SEED_SWEEP:-1}"
+
+if [[ "$SKIP_TO_POST_SFT" == "1" && "$CLEAN_OLD" == "1" ]]; then
+  printf "[%s] SKIP_TO_POST_SFT=1: overriding CLEAN_OLD to 0 to preserve existing artifacts.\n" "$(date +"%Y-%m-%d %H:%M:%S")"
+  CLEAN_OLD=0
+fi
 
 log() {
   printf "[%s] %s\n" "$(date +"%Y-%m-%d %H:%M:%S")" "$*"
@@ -32,6 +41,50 @@ log() {
 run() {
   log "RUN: $*"
   "$@"
+}
+
+assert_resume_artifacts() {
+  if [[ "$SKIP_TO_POST_SFT" != "1" ]]; then
+    return
+  fi
+
+  local -a required_paths=(
+    "$RUN_DIR/training_jobs/full_sft/model"
+    "$RUN_DIR/data/training_full/dpo_train.jsonl"
+    "$RUN_DIR/data/training_full/dpo_val.jsonl"
+    "$RUN_DIR/data/training_full/dpo_perfect_train.jsonl"
+    "$RUN_DIR/data/training_full/dpo_perfect_val.jsonl"
+    "$RUN_DIR/data/training_success_signal/dpo_train.jsonl"
+    "$RUN_DIR/data/training_success_signal/dpo_val.jsonl"
+    "$RUN_DIR/data/training_delay_holdout_train/sft_train.jsonl"
+    "$RUN_DIR/data/training_delay_holdout_train/sft_val.jsonl"
+    "$RUN_DIR/data/training_delay_holdout_train/dpo_train.jsonl"
+    "$RUN_DIR/data/training_delay_holdout_train/dpo_val.jsonl"
+  )
+
+  local d
+  for d in calendar email rest sql webhook file_storage access_control notification; do
+    required_paths+=(
+      "$RUN_DIR/data/training_domain_holdout_${d}/sft_train.jsonl"
+      "$RUN_DIR/data/training_domain_holdout_${d}/sft_val.jsonl"
+      "$RUN_DIR/data/training_domain_holdout_${d}/dpo_train.jsonl"
+      "$RUN_DIR/data/training_domain_holdout_${d}/dpo_val.jsonl"
+    )
+  done
+
+  local missing=0
+  local path
+  for path in "${required_paths[@]}"; do
+    if [[ ! -e "$path" ]]; then
+      log "Missing required resume artifact: $path"
+      missing=1
+    fi
+  done
+
+  if [[ "$missing" == "1" ]]; then
+    log "FAIL: SKIP_TO_POST_SFT=1 but required artifacts are missing."
+    exit 12
+  fi
 }
 
 cleanup_old_artifacts() {
@@ -128,10 +181,37 @@ if actual != expected:
 PY
 }
 
+assert_fallback_rates() {
+  local path="$1"
+  local max_rate="$2"
+  python - <<PY
+import pandas as pd
+from pathlib import Path
+import sys
+
+path = Path("$path")
+max_rate = float("$max_rate")
+if not path.exists():
+    print(f"Missing fallback metrics: {path}")
+    sys.exit(6)
+df = pd.read_csv(path)
+if df.empty:
+    print(f"Fallback metrics empty: {path}")
+    sys.exit(7)
+observed = float(df["fallback_rate"].max())
+print(f"max_fallback_rate={observed:.6f} threshold={max_rate:.6f}")
+if observed > max_rate:
+    print("FAIL: fallback rate exceeded threshold.")
+    sys.exit(8)
+PY
+}
+
 if [[ "$CLEAN_OLD" == "1" ]]; then
   log "Cleaning old artifacts and stale processes."
   cleanup_old_artifacts
 fi
+
+assert_resume_artifacts
 
 mkdir -p "$RUN_DIR"/{data,baseline_runs,baseline_metrics,training_jobs/logs,checkpoint_eval,checkpoint_eval_holdouts,api_eval}
 
@@ -156,7 +236,7 @@ else
   run python -m scripts.run_baselines \
     --variants "$RUN_DIR/data/variant_tasks.jsonl" \
     --output-dir "$RUN_DIR/baseline_runs" \
-    --split test \
+    --split "$BASELINE_SPLIT" \
     --repeats "$BASELINE_REPEATS" \
     --seed "$SEED" \
     --max-scenarios "$MAX_SCENARIOS"
@@ -299,10 +379,53 @@ for d in calendar email rest sql webhook file_storage access_control notificatio
     --execute 2>&1 | tee "$RUN_DIR/training_jobs/logs/domain_holdout_${d}_dpo_defer.log"
 done
 
+# --- Multi-seed training for seed sweep ---
+if [[ "$TRAIN_SEED_SWEEP" == "1" ]]; then
+  SEEDS_JSON="defer/configs/seeds.json"
+  ALL_SEEDS=$(python -c "import json; d=json.load(open('$SEEDS_JSON')); print(' '.join(str(s) for s in d['primary_model_seeds']+d['confirmatory_model_seeds']))")
+
+  for SWEEP_SEED in $ALL_SEEDS; do
+    log "Training seed $SWEEP_SEED checkpoints for seed sweep."
+
+    run python -m scripts.train_sft \
+      --output-dir "$RUN_DIR/training_jobs/full_sft_seed_${SWEEP_SEED}" \
+      --model-name "$BASE_MODEL" \
+      --train-path "$RUN_DIR/data/training_full/sft_train.jsonl" \
+      --val-path "$RUN_DIR/data/training_full/sft_val.jsonl" \
+      --seed "$SWEEP_SEED" \
+      --execute 2>&1 | tee "$RUN_DIR/training_jobs/logs/full_sft_seed_${SWEEP_SEED}.log"
+
+    for variant in defer perfect success_signal; do
+      case $variant in
+        defer)   pairs_train="$RUN_DIR/data/training_full/dpo_train.jsonl"
+                 pairs_val="$RUN_DIR/data/training_full/dpo_val.jsonl"
+                 suffix="defer" ;;
+        perfect) pairs_train="$RUN_DIR/data/training_full/dpo_perfect_train.jsonl"
+                 pairs_val="$RUN_DIR/data/training_full/dpo_perfect_val.jsonl"
+                 suffix="perfect" ;;
+        success_signal) pairs_train="$RUN_DIR/data/training_success_signal/dpo_train.jsonl"
+                        pairs_val="$RUN_DIR/data/training_success_signal/dpo_val.jsonl"
+                        suffix="success_signal" ;;
+      esac
+
+      run python -m scripts.train_dpo \
+        --output-dir "$RUN_DIR/training_jobs/full_dpo_${suffix}_seed_${SWEEP_SEED}" \
+        --model-name "$RUN_DIR/training_jobs/full_sft_seed_${SWEEP_SEED}/model" \
+        --train-pairs "$pairs_train" \
+        --val-pairs "$pairs_val" \
+        --seed "$SWEEP_SEED" \
+        --mode dpo \
+        --execute 2>&1 | tee "$RUN_DIR/training_jobs/logs/full_dpo_${suffix}_seed_${SWEEP_SEED}.log"
+    done
+  done
+else
+  log "TRAIN_SEED_SWEEP=0: skipping per-seed training."
+fi
+
 run python -m scripts.run_checkpoint_eval \
   --variants "$RUN_DIR/data/variant_tasks.jsonl" \
   --output-dir "$RUN_DIR/checkpoint_eval/main" \
-  --split test \
+  --split "$EVAL_SPLIT" \
   --repeats "$EVAL_REPEATS" \
   --seed "$SEED" \
   --max-scenarios "$MAX_SCENARIOS" \
@@ -310,7 +433,9 @@ run python -m scripts.run_checkpoint_eval \
   --model-policy clean_sft_only="$RUN_DIR/training_jobs/full_sft/model" \
   --model-policy perfect_verifier_posttrain="$RUN_DIR/training_jobs/full_dpo_perfect/model" \
   --model-policy defer_full="$RUN_DIR/training_jobs/full_dpo_defer/model" \
-  --model-policy success_signal_posttrain="$RUN_DIR/training_jobs/full_dpo_success_signal/model"
+  --model-policy success_signal_posttrain="$RUN_DIR/training_jobs/full_dpo_success_signal/model" \
+  --max-fallback-rate "$MAX_FALLBACK_RATE" \
+  --training-traces "$RUN_DIR/baseline_runs/episode_traces.jsonl"
 
 run python -m scripts.evaluate_metrics \
   --records-path "$RUN_DIR/checkpoint_eval/main/reliability_records.jsonl" \
@@ -321,32 +446,36 @@ run python -m scripts.evaluate_metrics \
   --strict-coverage \
   --fallback-metrics-path "$RUN_DIR/checkpoint_eval/main/fallback_metrics.csv"
 
-run python -m scripts.run_checkpoint_seed_sweep \
-  --variants "$RUN_DIR/data/variant_tasks.jsonl" \
-  --output-dir "$RUN_DIR/checkpoint_eval/seed_sweep" \
-  --seeds-config defer/configs/seeds.json \
-  --repeats "$EVAL_REPEATS" \
-  --split test \
-  --max-scenarios "$MAX_SCENARIOS" \
-  --include-baselines runtime_verification_only,react,stress_training_no_contracts \
-  --model-policy-template clean_sft_only="$RUN_DIR/training_jobs/full_sft/model" \
-  --model-policy-template perfect_verifier_posttrain="$RUN_DIR/training_jobs/full_dpo_perfect/model" \
-  --model-policy-template defer_full="$RUN_DIR/training_jobs/full_dpo_defer/model" \
-  --model-policy-template success_signal_posttrain="$RUN_DIR/training_jobs/full_dpo_success_signal/model"
+if [[ "$TRAIN_SEED_SWEEP" == "1" ]]; then
+  run python -m scripts.run_checkpoint_seed_sweep \
+    --variants "$RUN_DIR/data/variant_tasks.jsonl" \
+    --output-dir "$RUN_DIR/checkpoint_eval/seed_sweep" \
+    --seeds-config defer/configs/seeds.json \
+    --repeats "$EVAL_REPEATS" \
+    --split "$EVAL_SPLIT" \
+    --max-scenarios "$MAX_SCENARIOS" \
+    --include-baselines runtime_verification_only,react,stress_training_no_contracts \
+    --model-policy-template clean_sft_only="$RUN_DIR/training_jobs/full_sft_seed_{seed}/model" \
+    --model-policy-template perfect_verifier_posttrain="$RUN_DIR/training_jobs/full_dpo_perfect_seed_{seed}/model" \
+    --model-policy-template defer_full="$RUN_DIR/training_jobs/full_dpo_defer_seed_{seed}/model" \
+    --model-policy-template success_signal_posttrain="$RUN_DIR/training_jobs/full_dpo_success_signal_seed_{seed}/model"
 
-run python -m scripts.evaluate_metrics \
-  --records-path "$RUN_DIR/checkpoint_eval/seed_sweep/merged_reliability_records.jsonl" \
-  --output-dir "$RUN_DIR/checkpoint_eval/seed_sweep_metrics" \
-  --bootstrap-resamples "$BOOTSTRAP_MAIN" \
-  --seed "$SEED" \
-  --min-episodes-per-cell "$MIN_EPISODES_PER_CELL" \
-  --strict-coverage \
-  --fallback-metrics-path "$RUN_DIR/checkpoint_eval/seed_sweep/fallback_metrics.csv"
+  run python -m scripts.evaluate_metrics \
+    --records-path "$RUN_DIR/checkpoint_eval/seed_sweep/merged_reliability_records.jsonl" \
+    --output-dir "$RUN_DIR/checkpoint_eval/seed_sweep_metrics" \
+    --bootstrap-resamples "$BOOTSTRAP_MAIN" \
+    --seed "$SEED" \
+    --min-episodes-per-cell "$MIN_EPISODES_PER_CELL" \
+    --strict-coverage \
+    --fallback-metrics-path "$RUN_DIR/checkpoint_eval/seed_sweep/fallback_metrics.csv"
+else
+  log "TRAIN_SEED_SWEEP=0: skipping seed sweep eval (no per-seed checkpoints)."
+fi
 
 run python -m scripts.run_checkpoint_eval \
   --variants "$RUN_DIR/data/generalization_splits/delay_holdout/eval_variants.jsonl" \
   --output-dir "$RUN_DIR/checkpoint_eval_holdouts/delay" \
-  --split test \
+  --split "$EVAL_SPLIT" \
   --repeats "$EVAL_REPEATS" \
   --seed "$SEED" \
   --max-scenarios "$MAX_SCENARIOS" \
@@ -367,7 +496,7 @@ for d in calendar email rest sql webhook file_storage access_control notificatio
   run python -m scripts.run_checkpoint_eval \
     --variants "$RUN_DIR/data/generalization_splits/domain_holdout/${d}_eval_variants.jsonl" \
     --output-dir "$RUN_DIR/checkpoint_eval_holdouts/domain_${d}" \
-    --split test \
+    --split "$EVAL_SPLIT" \
     --repeats "$EVAL_REPEATS" \
     --seed "$SEED" \
     --max-scenarios "$MAX_SCENARIOS" \
@@ -419,7 +548,7 @@ if [[ "$RUN_API_BASELINE" == "1" ]]; then
     run python -m scripts.run_api_eval \
       --variants "$RUN_DIR/data/variant_tasks.jsonl" \
       --output-dir "$RUN_DIR/api_eval/openai_main" \
-      --split test \
+      --split "$EVAL_SPLIT" \
       --repeats "$API_REPEATS" \
       --seed "$SEED" \
       --max-scenarios "$API_MAX_SCENARIOS" \
@@ -440,7 +569,7 @@ if [[ "$RUN_API_BASELINE" == "1" ]]; then
     run python -m scripts.run_api_eval \
       --variants "$RUN_DIR/data/variant_tasks.jsonl" \
       --output-dir "$RUN_DIR/api_eval/prompted_deferral" \
-      --split test --repeats "$API_REPEATS" --seed "$SEED" \
+      --split "$EVAL_SPLIT" --repeats "$API_REPEATS" --seed "$SEED" \
       --max-scenarios "$API_MAX_SCENARIOS" \
       --include-baselines runtime_verification_only \
       --api-key-env "$API_KEY_ENV" \
@@ -458,15 +587,42 @@ if [[ "$RUN_API_BASELINE" == "1" ]]; then
   fi
 fi
 
+# Use seed_sweep_metrics if available, otherwise fall back to main_metrics.
+if [[ -f "$RUN_DIR/checkpoint_eval/seed_sweep_metrics/claim_gates.json" ]]; then
+  CLAIM_GATES_DIR="$RUN_DIR/checkpoint_eval/seed_sweep_metrics"
+  FALLBACK_CSV="$RUN_DIR/checkpoint_eval/seed_sweep/fallback_metrics.csv"
+else
+  CLAIM_GATES_DIR="$RUN_DIR/checkpoint_eval/main_metrics"
+  FALLBACK_CSV="$RUN_DIR/checkpoint_eval/main/fallback_metrics.csv"
+fi
+
 log "Final claim gates:"
-cat "$RUN_DIR/checkpoint_eval/seed_sweep_metrics/claim_gates.json"
+cat "$CLAIM_GATES_DIR/claim_gates.json"
+
+ALLOW_FAILED_CLAIMS="${ALLOW_FAILED_CLAIMS:-0}"
+python - <<PY
+import json, sys
+gates = json.load(open("$CLAIM_GATES_DIR/claim_gates.json"))
+failed = []
+if not gates.get("gate_1"):
+    failed.append("gate_1 (defer_full does not dominate runtime_verification_only)")
+if not gates.get("gate_2"):
+    failed.append("gate_2 (defer_full DCS does not dominate perfect_verifier)")
+if failed:
+    for f in failed:
+        print(f"FAIL: {f}")
+    if "$ALLOW_FAILED_CLAIMS" != "1":
+        sys.exit(10)
+    print("Continuing because ALLOW_FAILED_CLAIMS=1")
+PY
 
 log "Fallback rates:"
 python - <<PY
 import pandas as pd
-path = "$RUN_DIR/checkpoint_eval/seed_sweep/fallback_metrics.csv"
+path = "$FALLBACK_CSV"
 df = pd.read_csv(path)
 print(df.sort_values("fallback_rate", ascending=False).to_string(index=False))
 PY
+assert_fallback_rates "$FALLBACK_CSV" "$MAX_FALLBACK_RATE"
 
 log "Complete. Final outputs are under: $RUN_DIR"

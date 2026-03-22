@@ -21,7 +21,7 @@ COMMIT_ACTIONS = {
 
 def trace_to_record(trace: EpisodeTrace, k: int) -> ReliabilityRecord:
     unresolved_events = sum(1 for t in trace.turns if t.unresolved_truth)
-    resolved_events = max(1, len(trace.turns) - unresolved_events)
+    resolved_events = len(trace.turns) - unresolved_events
     deferred_when_unresolved = sum(
         1
         for t in trace.turns
@@ -119,9 +119,20 @@ def reliability_surface(
 
 def area_under_reliability_surface(
     surface: dict[tuple[int, float, float], float],
+    expected_cells: int | None = None,
 ) -> float:
+    """Unweighted mean of pass@k across (k, epsilon, lambda) cells.
+
+    Correct for a uniform grid. Logs a warning if grid is >20% sparse.
+    """
     if not surface:
         return 0.0
+    if expected_cells is not None and len(surface) < 0.8 * expected_cells:
+        import logging
+        logging.getLogger(__name__).warning(
+            "AURS grid sparse: %d/%d cells (%.0f%%).",
+            len(surface), expected_cells, 100 * len(surface) / expected_cells,
+        )
     return sum(surface.values()) / len(surface)
 
 

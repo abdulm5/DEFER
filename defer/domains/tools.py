@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from defer.domains.state import ApiResource, CalendarEvent, EmailMessage, SqlRow, WorldState
-from defer.domains.types import ToolExecutionResult
+from defer.domains.types import ToolExecutionResult, deterministic_id, reset_tool_call_counter
 
 
 def create_calendar_event(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
-    event_id = args.get("event_id", f"evt_{uuid.uuid4().hex[:8]}")
+    event_id = args.get("event_id", deterministic_id("evt"))
     event = CalendarEvent(
         event_id=event_id,
         title=args["title"],
@@ -29,7 +28,7 @@ def create_calendar_event(state: WorldState, args: dict[str, Any]) -> ToolExecut
 
 
 def send_email(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
-    message_id = args.get("message_id", f"msg_{uuid.uuid4().hex[:8]}")
+    message_id = args.get("message_id", deterministic_id("msg"))
     email = EmailMessage(
         message_id=message_id,
         subject=args["subject"],
@@ -49,7 +48,7 @@ def send_email(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
 
 
 def upsert_api_resource(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
-    resource_id = args.get("resource_id", f"res_{uuid.uuid4().hex[:8]}")
+    resource_id = args.get("resource_id", deterministic_id("res"))
     current = state.api_resources.get(resource_id)
     version = 1 if current is None else current.version + 1
     resource = ApiResource(resource_id=resource_id, payload=args.get("payload", {}), version=version)

@@ -93,11 +93,16 @@ def run_dpo_training(manifest: dict[str, Any], output_dir: str | Path) -> dict[s
             )
             quantized_4bit = True
         except Exception as exc:
-            # Common incompatible stack path: accelerate dispatch calls `.to()` on a 4-bit model.
-            msg = str(exc)
-            if "not supported for `4-bit` or `8-bit` bitsandbytes models" not in msg:
+            # Common incompatible stack path: accelerate dispatch calls `.to()` on a 4-bit model,
+            # or bitsandbytes is not installed.
+            msg = str(exc).lower()
+            if not any(phrase in msg for phrase in [
+                "not supported for",
+                "bitsandbytes",
+                "no module named",
+            ]):
                 raise
-            quantization_fallback_reason = msg
+            quantization_fallback_reason = str(exc)
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 torch_dtype=torch.bfloat16,

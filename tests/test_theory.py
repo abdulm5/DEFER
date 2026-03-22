@@ -85,3 +85,23 @@ def test_multi_step_threshold_monotonic():
     values = [t for _, t in thresholds]
     for i in range(len(values) - 1):
         assert values[i] <= values[i + 1] or True
+
+
+import math
+
+
+def test_pearson_small_n_returns_nan():
+    from defer.analysis.theory import _pearson
+    r, p = _pearson([1.0], [2.0])
+    assert math.isnan(r)
+    assert math.isnan(p)
+
+
+def test_pearson_returns_pvalue_or_nan_without_scipy():
+    """r should always be computed; p may be NaN if scipy is absent."""
+    from defer.analysis.theory import _pearson
+    r, p = _pearson([1, 2, 3, 4, 5], [2, 4, 5, 4, 5])
+    assert not math.isnan(r)
+    assert r > 0
+    if not math.isnan(p):
+        assert 0.0 <= p <= 1.0

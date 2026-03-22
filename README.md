@@ -47,7 +47,7 @@ python -m scripts.run_paper_data_collection \
   --tasks-per-domain 300 \
   --baseline-repeats 3 \
   --seed 42 \
-  --max-scenarios 2000 \
+  --max-scenarios 3000 \
   --baseline-bootstrap-resamples 2000 \
   --sweep-repeats 5 \
   --sweep-bootstrap-resamples 10000
@@ -60,6 +60,9 @@ Run the full training + checkpoint-eval + holdout suite with one command:
 ```bash
 RUN_DIR=artifacts/final_run_v1 CLEAN_OLD=1 BASE_MODEL=Qwen/Qwen2.5-1.5B-Instruct \
   ./scripts/run_final_data_collection.sh
+
+# Optional split override (defaults: BASELINE_SPLIT=train, EVAL_SPLIT=test)
+# BASELINE_SPLIT=train EVAL_SPLIT=test ./scripts/run_final_data_collection.sh
 ```
 
 Optional API baseline:

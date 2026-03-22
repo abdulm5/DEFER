@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import statistics
 from pathlib import Path
 from typing import Callable, Iterable
@@ -10,8 +11,10 @@ import pandas as pd
 import yaml
 
 from defer.analysis.tables import summary_table
+from defer.configs.defaults import EPSILON_GRID, LAMBDA_GRID
 from defer.core.interfaces import ReliabilityRecord
 from defer.core.io import read_jsonl, write_json
+from defer.data.seeds import DOMAIN_TEMPLATES
 from defer.metrics.deferral import (
     commit_precision,
     commit_recall,
@@ -73,6 +76,7 @@ def run(
         output_dir=output_dir,
         min_episodes_per_cell=min_episodes_per_cell,
         strict_coverage=strict_coverage,
+        protocol=protocol_payload,
     )
 
     if not records:
@@ -204,7 +208,7 @@ def run(
 
     claim_gate = _compute_claim_gates(ci_df)
     write_json(output_dir / "claim_gates.json", claim_gate)
-    pairwise_df = _pairwise_significance(records=records, bootstrap_resamples=bootstrap_resamples, seed=seed)
+    pairwise_df = _pairwise_significance(records=records, bootstrap_resamples=bootstrap_resamples, seed=seed, protocol=protocol_payload)
     pairwise_df.to_csv(output_dir / "pairwise_tests.csv", index=False)
     print(f"Wrote metrics to {output_dir}")
 
@@ -318,6 +322,7 @@ def _write_cell_coverage(
     output_dir: Path,
     min_episodes_per_cell: int,
     strict_coverage: bool,
+    protocol: dict | None = None,
 ) -> None:
     if not records:
         pd.DataFrame(
@@ -325,11 +330,33 @@ def _write_cell_coverage(
         ).to_csv(output_dir / "cell_coverage.csv", index=False)
         return
     df = pd.DataFrame([record.model_dump(mode="json") for record in records])
-    coverage = (
+    coverage_present = (
         df.groupby(["policy_name", "domain", "epsilon", "lambda_fault"], as_index=False)
         .size()
         .rename(columns={"policy_name": "policy", "size": "episode_count"})
     )
+    policies = sorted(set(coverage_present["policy"]))
+    if protocol and protocol.get("exists"):
+        comparisons = protocol.get("payload", {}).get("comparisons", [])
+        required_policies: set[str] = set()
+        for pair in comparisons:
+            required_policies.update(pair)
+        policies = sorted(set(policies) | required_policies)
+    domains = sorted(set(DOMAIN_TEMPLATES.keys()).union(set(df["domain"].unique())))
+    epsilons = sorted(set(float(x) for x in EPSILON_GRID).union(set(float(x) for x in df["epsilon"].unique())))
+    lambdas = sorted(
+        set(float(x) for x in LAMBDA_GRID).union(set(float(x) for x in df["lambda_fault"].unique()))
+    )
+    expected = pd.MultiIndex.from_product(
+        [policies, domains, epsilons, lambdas],
+        names=["policy", "domain", "epsilon", "lambda_fault"],
+    ).to_frame(index=False)
+    coverage = expected.merge(
+        coverage_present,
+        on=["policy", "domain", "epsilon", "lambda_fault"],
+        how="left",
+    )
+    coverage["episode_count"] = coverage["episode_count"].fillna(0).astype(int)
     coverage["meets_minimum"] = coverage["episode_count"] >= min_episodes_per_cell
     coverage.to_csv(output_dir / "cell_coverage.csv", index=False)
     if strict_coverage and not bool(coverage["meets_minimum"].all()):
@@ -339,24 +366,82 @@ def _write_cell_coverage(
             f"{len(failed)} cells below minimum {min_episodes_per_cell} episodes."
         )
 
+    # Delay-mechanism coverage check
+    from defer.data.variants import DELAY_MECHANISMS as _KNOWN_DELAY_MECHANISMS
+
+    expected_mechanisms = {"none"} | set(_KNOWN_DELAY_MECHANISMS)
+    if "delay_mechanism" in df.columns:
+        delay_coverage_present = (
+            df.groupby(["policy_name", "delay_mechanism"], as_index=False)
+            .size()
+            .rename(columns={"policy_name": "policy", "size": "episode_count"})
+        )
+        delay_expected = pd.MultiIndex.from_product(
+            [policies, sorted(expected_mechanisms)],
+            names=["policy", "delay_mechanism"],
+        ).to_frame(index=False)
+        delay_coverage = delay_expected.merge(
+            delay_coverage_present,
+            on=["policy", "delay_mechanism"],
+            how="left",
+        )
+        delay_coverage["episode_count"] = delay_coverage["episode_count"].fillna(0).astype(int)
+        delay_coverage["meets_minimum"] = delay_coverage["episode_count"] >= min_episodes_per_cell
+        delay_coverage.to_csv(output_dir / "delay_mechanism_coverage.csv", index=False)
+        if strict_coverage and not bool(delay_coverage["meets_minimum"].all()):
+            failed_delay = delay_coverage[~delay_coverage["meets_minimum"]]
+            raise ValueError(
+                "Delay-mechanism coverage check failed: "
+                f"{len(failed_delay)} (policy, delay_mechanism) cells below minimum "
+                f"{min_episodes_per_cell} episodes.\n"
+                f"Missing/low:\n{failed_delay.to_string(index=False)}"
+            )
+
+
+def _benjamini_hochberg(p_values: list[float]) -> list[float]:
+    """Benjamini-Hochberg FDR correction. NaN p-values pass through as NaN."""
+    n = len(p_values)
+    if n == 0:
+        return []
+    indexed = [(i, p) for i, p in enumerate(p_values)]
+    valid = [(i, p) for i, p in indexed if not math.isnan(p)]
+    if not valid:
+        return [float("nan")] * n
+    valid.sort(key=lambda x: x[1])
+    m = len(valid)
+    adjusted = [0.0] * m
+    for rank, (_, p) in enumerate(valid, 1):
+        adjusted[rank - 1] = p * m / rank
+    for j in range(m - 2, -1, -1):
+        adjusted[j] = min(adjusted[j], adjusted[j + 1])
+    adjusted = [min(a, 1.0) for a in adjusted]
+    result = [float("nan")] * n
+    for k, (orig_idx, _) in enumerate(valid):
+        result[orig_idx] = adjusted[k]
+    return result
+
 
 def _pairwise_significance(
     records: list[ReliabilityRecord],
     bootstrap_resamples: int,
     seed: int,
+    protocol: dict | None = None,
 ) -> pd.DataFrame:
     by_policy: dict[str, list[ReliabilityRecord]] = {}
     for record in records:
         by_policy.setdefault(record.policy_name, []).append(record)
 
-    comparisons = [
-        ("defer_full", "clean_sft_only"),
-        ("defer_full", "runtime_verification_only"),
-        ("defer_full", "perfect_verifier_posttrain"),
-        ("defer_full", "success_signal_posttrain"),
-        ("defer_full", "prompted_deferral"),
-        ("success_signal_posttrain", "clean_sft_only"),
-    ]
+    if protocol and protocol.get("exists") and "comparisons" in protocol.get("payload", {}):
+        comparisons = [tuple(pair) for pair in protocol["payload"]["comparisons"]]
+    else:
+        comparisons = [
+            ("defer_full", "clean_sft_only"),
+            ("defer_full", "runtime_verification_only"),
+            ("defer_full", "perfect_verifier_posttrain"),
+            ("defer_full", "success_signal_posttrain"),
+            ("defer_full", "prompted_deferral"),
+            ("success_signal_posttrain", "clean_sft_only"),
+        ]
 
     def cluster_key(record: ReliabilityRecord) -> tuple[int, str]:
         return (record.seed, record.scenario_id)
@@ -396,6 +481,10 @@ def _pairwise_significance(
                     **result,
                 }
             )
+    raw_ps = [row["p_value_two_sided"] for row in rows]
+    adjusted_ps = _benjamini_hochberg(raw_ps)
+    for row, adj_p in zip(rows, adjusted_ps):
+        row["adjusted_p_value"] = adj_p
     return pd.DataFrame(rows)
 
 

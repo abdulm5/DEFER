@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from defer.domains.extended_state import (
@@ -10,11 +9,11 @@ from defer.domains.extended_state import (
     WebhookEndpoint,
 )
 from defer.domains.state import WorldState
-from defer.domains.types import ToolExecutionResult
+from defer.domains.types import ToolExecutionResult, deterministic_id
 
 
 def register_webhook(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
-    webhook_id = args.get("webhook_id", f"wh_{uuid.uuid4().hex[:8]}")
+    webhook_id = args.get("webhook_id", deterministic_id("wh"))
     endpoint = WebhookEndpoint(
         webhook_id=webhook_id,
         url=args["url"],
@@ -33,7 +32,7 @@ def register_webhook(state: WorldState, args: dict[str, Any]) -> ToolExecutionRe
 
 
 def upload_file(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
-    file_id = args.get("file_id", f"file_{uuid.uuid4().hex[:8]}")
+    file_id = args.get("file_id", deterministic_id("file"))
     shared = bool(args.get("shared", False))
     stored = StoredFile(
         file_id=file_id,
@@ -53,7 +52,7 @@ def upload_file(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
 
 
 def modify_access(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
-    grant_id = args.get("grant_id", f"grant_{uuid.uuid4().hex[:8]}")
+    grant_id = args.get("grant_id", deterministic_id("grant"))
     grant = AccessGrant(
         grant_id=grant_id,
         principal=args["principal"],
@@ -72,7 +71,7 @@ def modify_access(state: WorldState, args: dict[str, Any]) -> ToolExecutionResul
 
 
 def send_notification(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
-    notification_id = args.get("notification_id", f"notif_{uuid.uuid4().hex[:8]}")
+    notification_id = args.get("notification_id", deterministic_id("notif"))
     delivered = bool(args.get("deliver_now", False))
     record = NotificationRecord(
         notification_id=notification_id,

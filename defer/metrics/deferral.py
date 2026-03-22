@@ -22,13 +22,14 @@ def deferral_precision(records: Iterable[ReliabilityRecord]) -> float:
     rows = list(records)
     if not rows:
         return 0.0
-    values = [
-        _safe_div(
-            row.deferred_when_unresolved,
-            row.deferred_when_unresolved + row.deferred_when_resolved,
-        )
-        for row in rows
-    ]
+    values = []
+    for row in rows:
+        total = row.deferred_when_unresolved + row.deferred_when_resolved
+        if total == 0:
+            continue
+        values.append(row.deferred_when_unresolved / total)
+    if not values:
+        return 0.0
     return mean(values)
 
 
@@ -43,13 +44,14 @@ def commit_precision(records: Iterable[ReliabilityRecord]) -> float:
     rows = list(records)
     if not rows:
         return 0.0
-    values = [
-        _safe_div(
-            row.committed_when_resolved,
-            row.committed_when_resolved + row.committed_when_unresolved,
-        )
-        for row in rows
-    ]
+    values = []
+    for row in rows:
+        total = row.committed_when_resolved + row.committed_when_unresolved
+        if total == 0:
+            continue
+        values.append(row.committed_when_resolved / total)
+    if not values:
+        return 0.0
     return mean(values)
 
 
@@ -84,14 +86,18 @@ def irreversible_error_rate(records: Iterable[ReliabilityRecord]) -> float:
     rows = list(records)
     if not rows:
         return 0.0
-    return mean(row.irreversible_errors for row in rows)
+    return mean(
+        _safe_div(row.irreversible_errors, row.total_commit_actions) for row in rows
+    )
 
 
 def evidence_freshness_violation_rate(records: Iterable[ReliabilityRecord]) -> float:
     rows = list(records)
     if not rows:
         return 0.0
-    return mean(row.evidence_freshness_violations for row in rows)
+    return mean(
+        _safe_div(row.evidence_freshness_violations, row.total_commit_actions) for row in rows
+    )
 
 
 def delayed_contradiction_rate(records: Iterable[ReliabilityRecord]) -> float:

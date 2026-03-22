@@ -10,6 +10,7 @@ from defer.baselines.runner import RunnerConfig, run_policies
 from defer.core.io import read_jsonl, write_json, write_jsonl
 from defer.data.schema import VariantTask
 from defer.sim.scenario import Scenario
+from defer.sim.sampling import deterministic_sample_scenarios
 
 
 def _rows_to_scenarios(
@@ -89,6 +90,7 @@ def run(
     top_p: float = 1.0,
     timeout_seconds: int = 60,
     system_prompt_override: str | None = None,
+    sampling_seed: int | None = None,
 ) -> None:
     if not api_policies:
         raise ValueError("At least one --api-policy name=model_id is required.")
@@ -101,14 +103,20 @@ def run(
         exclude_delay_mechanisms=exclude_delay_mechanisms,
     )
     if not scenarios:
-        scenarios = _rows_to_scenarios(
-            rows,
-            split=None,
-            domains=domains,
-            include_delay_mechanisms=include_delay_mechanisms,
-            exclude_delay_mechanisms=exclude_delay_mechanisms,
+        raise ValueError(
+            "No scenarios found for requested split/filter combination: "
+            f"split={split}, domains={sorted(domains) if domains else 'all'}, "
+            "include_delay_mechanisms="
+            f"{sorted(include_delay_mechanisms) if include_delay_mechanisms else 'all'}, "
+            "exclude_delay_mechanisms="
+            f"{sorted(exclude_delay_mechanisms) if exclude_delay_mechanisms else []}."
         )
-    scenarios = scenarios[:max_scenarios]
+    scenarios = deterministic_sample_scenarios(
+        scenarios=scenarios,
+        max_scenarios=max_scenarios,
+        seed=sampling_seed if sampling_seed is not None else seed,
+        salt=f"run_api_eval::{split}",
+    )
 
     registry = policy_registry()
     if fallback_policy_name not in registry:
@@ -127,7 +135,7 @@ def run(
 
     policy_stats: dict[str, dict] = {}
     for name, model in _parse_api_specs(api_policies):
-        fallback = registry.get(name, registry[fallback_policy_name])
+        fallback = registry[fallback_policy_name]
         extra_kwargs: dict = {}
         if name in system_prompt_map:
             extra_kwargs["system_prompt"] = system_prompt_map[name]
@@ -250,6 +258,8 @@ def main() -> None:
         default=None,
         help="Override system prompt for matching policy name. E.g. 'prompted_deferral'.",
     )
+    parser.add_argument("--sampling-seed", type=int, default=None,
+                        help="Seed for scenario sampling (default: use --seed).")
     args = parser.parse_args()
     domains = {d.strip() for d in args.domains.split(",") if d.strip()} or None
     include_delay_mechanisms = (
@@ -279,6 +289,7 @@ def main() -> None:
         top_p=args.top_p,
         timeout_seconds=args.timeout_seconds,
         system_prompt_override=args.system_prompt_override,
+        sampling_seed=args.sampling_seed,
     )
 
 

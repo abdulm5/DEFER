@@ -20,6 +20,7 @@ from defer.core.interfaces import (
     ProcedureGates,
     ToolCall,
     VerificationDecision,
+    VerifierOutput,
 )
 from defer.core.correlated_verifier import (
     CorrelatedVerifier,
@@ -30,6 +31,7 @@ from defer.core.verifier import UncertainVerifier, VerifierConfig
 from defer.domains.contracts import default_contracts
 from defer.domains.state import WorldState
 from defer.domains.tools import TOOLS
+from defer.domains.types import reset_tool_call_counter
 from defer.sim.events import EventLoop
 from defer.sim.scenario import Scenario
 from defer.stress.faults import FaultInjector, FaultProfile
@@ -73,8 +75,10 @@ class SimulationEnvironment:
         repeat_index: int,
     ) -> EpisodeTrace:
         scenario_offset = int(hashlib.sha1(scenario.scenario_id.encode("utf-8")).hexdigest()[:8], 16) % 1_000_000
-        policy_offset = int(hashlib.sha1(policy.name.encode("utf-8")).hexdigest()[:6], 16) % 100_000
-        episode_seed = seed + scenario_offset + repeat_index * 131 + policy_offset
+        # Keep stochastic environment realizations policy-invariant so paired
+        # policy comparisons are not confounded by policy-specific RNG streams.
+        episode_seed = seed + scenario_offset + repeat_index * 131
+        reset_tool_call_counter(episode_seed)
         verifier_config = self._effective_verifier_config(
             scenario=scenario,
             epsilon=epsilon,
@@ -163,8 +167,12 @@ class SimulationEnvironment:
                         contradiction_source = contradiction_event.contradiction_source
                         turn.contradiction_source = contradiction_source
                         turn.contradiction_observed = True
+                        unresolved_truth = False
+                    elif any(bool(event.revealed_truth.get("resolved", False)) for event in new_delays):
+                        unresolved_truth = False
                 if any(event.contradiction for event in delayed_events):
                     contradiction_observed = True
+                    unresolved_truth = False
                 turns.append(turn)
                 last_action = turn.selected_action
                 continue
@@ -213,6 +221,14 @@ class SimulationEnvironment:
                 turn.observation = {"error": "missing_required_argument", "fault": fault}
                 turn.state_diff = {}
                 turn.irreversible_commit = scenario.expects_irreversible
+                turn.verifier_output = VerifierOutput(
+                    decision=VerificationDecision.REJECT,
+                    confidence=0.1,
+                    freshness=Freshness.STALE,
+                    pending_postconditions=[],
+                    pending_postcondition_reason=None,
+                    evidence_ids=["error:missing_required_argument"],
+                )
                 last_pending_reason = "unknown"
                 turns.append(turn)
                 last_action = turn.selected_action
@@ -298,7 +314,7 @@ class SimulationEnvironment:
                     contradiction_source = contradiction_event.contradiction_source
                     turn.contradiction_source = contradiction_source
                     unresolved_truth = False
-                else:
+                elif any(bool(event.revealed_truth.get("resolved", False)) for event in delayed_emitted):
                     unresolved_truth = False
 
             turn.contradiction_observed = contradiction_observed

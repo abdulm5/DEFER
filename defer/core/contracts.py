@@ -27,7 +27,13 @@ def _match_condition(state: dict[str, Any], condition: ConditionSpec) -> bool:
     target = condition.value
 
     if op == "exists":
-        return exists
+        if not exists:
+            return False
+        if current is None:
+            return False
+        if isinstance(current, (dict, list, tuple, set, str, bytes)):
+            return len(current) > 0
+        return True
     if not exists:
         return False
     if op == "eq":
@@ -61,4 +67,3 @@ def check_postconditions(contract: ContractSpec, state: dict[str, Any]) -> list[
         if not _match_condition(state, condition):
             failures.append(f"postcondition_failed:{condition.field}:{condition.op}")
     return failures
-

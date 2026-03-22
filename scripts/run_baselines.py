@@ -8,6 +8,7 @@ from defer.configs.defaults import BASELINES
 from defer.core.io import read_jsonl, write_json, write_jsonl
 from defer.data.schema import VariantTask
 from defer.sim.scenario import Scenario
+from defer.sim.sampling import deterministic_sample_scenarios
 
 def _rows_to_scenarios(
     rows: list[dict],
@@ -60,6 +61,7 @@ def run(
     domains: set[str] | None = None,
     include_delay_mechanisms: set[str] | None = None,
     exclude_delay_mechanisms: set[str] | None = None,
+    sampling_seed: int | None = None,
 ) -> None:
     rows = read_jsonl(variants)
     scenarios = _rows_to_scenarios(
@@ -70,17 +72,20 @@ def run(
         exclude_delay_mechanisms=exclude_delay_mechanisms,
     )
     if not scenarios:
-        print(
-            f"No scenarios found for split={split}; falling back to all splits for deterministic smoke run."
+        raise ValueError(
+            "No scenarios found for requested split/filter combination: "
+            f"split={split}, domains={sorted(domains) if domains else 'all'}, "
+            "include_delay_mechanisms="
+            f"{sorted(include_delay_mechanisms) if include_delay_mechanisms else 'all'}, "
+            "exclude_delay_mechanisms="
+            f"{sorted(exclude_delay_mechanisms) if exclude_delay_mechanisms else []}."
         )
-        scenarios = _rows_to_scenarios(
-            rows,
-            split=None,
-            domains=domains,
-            include_delay_mechanisms=include_delay_mechanisms,
-            exclude_delay_mechanisms=exclude_delay_mechanisms,
-        )
-    scenarios = scenarios[:max_scenarios]
+    scenarios = deterministic_sample_scenarios(
+        scenarios=scenarios,
+        max_scenarios=max_scenarios,
+        seed=sampling_seed if sampling_seed is not None else seed,
+        salt=f"run_baselines::{split}",
+    )
     traces, records = run_baselines(
         scenarios=scenarios,
         selected_policies=BASELINES,
@@ -139,6 +144,8 @@ def main() -> None:
         default="",
         help="Comma-separated delay mechanism denylist.",
     )
+    parser.add_argument("--sampling-seed", type=int, default=None,
+                        help="Seed for scenario sampling (default: use --seed).")
     args = parser.parse_args()
     domains = {d.strip() for d in args.domains.split(",") if d.strip()} or None
     include_delay_mechanisms = (
@@ -157,6 +164,7 @@ def main() -> None:
         domains=domains,
         include_delay_mechanisms=include_delay_mechanisms,
         exclude_delay_mechanisms=exclude_delay_mechanisms,
+        sampling_seed=args.sampling_seed,
     )
 
 

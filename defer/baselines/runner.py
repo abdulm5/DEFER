@@ -23,6 +23,7 @@ def run_policies(
     config: RunnerConfig | None = None,
 ) -> tuple[list[EpisodeTrace], list[ReliabilityRecord]]:
     cfg = config or RunnerConfig()
+    scenario_list = list(scenarios)
     env = SimulationEnvironment(
         EnvironmentConfig(
             max_turns=4,
@@ -35,7 +36,7 @@ def run_policies(
     traces: list[EpisodeTrace] = []
     records: list[ReliabilityRecord] = []
     for policy in policies:
-        for scenario in scenarios:
+        for scenario in scenario_list:
             for repeat_idx in range(cfg.repeats):
                 trace = env.run_episode(
                     scenario=scenario,

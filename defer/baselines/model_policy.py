@@ -184,6 +184,7 @@ class HFCheckpointPolicy:
         self.total_decisions = 0
         self.parse_failures = 0
         self.fallback_calls = 0
+        self.runtime_errors = 0
 
         try:
             import torch
@@ -201,14 +202,18 @@ class HFCheckpointPolicy:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         if torch.cuda.is_available():
-            self.device = "cuda"
             self.model = AutoModelForCausalLM.from_pretrained(
                 checkpoint,
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
             )
+            self.device = getattr(self.model, "device", torch.device("cuda:0"))
+        elif bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+            self.device = torch.device("mps")
+            self.model = AutoModelForCausalLM.from_pretrained(checkpoint)
+            self.model.to(self.device)
         else:
-            self.device = "cpu"
+            self.device = torch.device("cpu")
             self.model = AutoModelForCausalLM.from_pretrained(checkpoint)
             self.model.to(self.device)
         self.model.eval()
@@ -216,30 +221,33 @@ class HFCheckpointPolicy:
     def decide(self, context: dict[str, Any]) -> PolicyDecision:
         self.total_decisions += 1
         prompt = _build_prompt(context)
+        encoded = self.tokenizer(prompt, return_tensors="pt")
+        input_ids = encoded["input_ids"].to(self.device)
+        attention_mask = encoded["attention_mask"].to(self.device)
+        generation_kwargs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "max_new_tokens": self.inference.max_new_tokens,
+            "do_sample": self.inference.temperature > 0.0,
+            "temperature": self.inference.temperature,
+            "top_p": self.inference.top_p,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+        }
         try:
-            encoded = self.tokenizer(prompt, return_tensors="pt")
-            input_ids = encoded["input_ids"].to(self.device)
-            attention_mask = encoded["attention_mask"].to(self.device)
-            generation_kwargs = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "max_new_tokens": self.inference.max_new_tokens,
-                "do_sample": self.inference.temperature > 0.0,
-                "temperature": self.inference.temperature,
-                "top_p": self.inference.top_p,
-                "pad_token_id": self.tokenizer.pad_token_id,
-                "eos_token_id": self.tokenizer.eos_token_id,
-            }
-            with self._torch.no_grad():
+            with self._torch.inference_mode():
                 out = self.model.generate(**generation_kwargs)
-            completion_ids = out[0][input_ids.shape[-1] :]
-            completion = self.tokenizer.decode(completion_ids, skip_special_tokens=True).strip()
-            decision = parse_policy_decision_text(completion, context=context)
-            if decision is not None:
-                return decision
-        except Exception:
-            # Fall through to fallback policy.
-            pass
+        except Exception as exc:
+            self.runtime_errors += 1
+            raise RuntimeError(
+                f"Model inference failed for policy '{self.name}' using checkpoint '{self.checkpoint_path}'."
+            ) from exc
+
+        completion_ids = out[0][input_ids.shape[-1] :]
+        completion = self.tokenizer.decode(completion_ids, skip_special_tokens=True).strip()
+        decision = parse_policy_decision_text(completion, context=context)
+        if decision is not None:
+            return decision
 
         self.parse_failures += 1
         self.fallback_calls += 1
@@ -259,5 +267,6 @@ class HFCheckpointPolicy:
             "total_decisions": self.total_decisions,
             "parse_failures": self.parse_failures,
             "fallback_calls": self.fallback_calls,
+            "runtime_errors": self.runtime_errors,
             "parse_failure_rate": failure_rate,
         }

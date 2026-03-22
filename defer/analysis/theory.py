@@ -100,12 +100,13 @@ def compare_empirical_to_optimal(
             }
         )
 
-    correlation = _pearson(empirical_rates, optimal_thresholds)
+    correlation, correlation_pvalue = _pearson(empirical_rates, optimal_thresholds)
     gaps = [c["gap"] for c in cells]
     mean_gap = sum(gaps) / len(gaps) if gaps else 0.0
     return {
         "n_records": len(records),
         "correlation": round(correlation, 4),
+        "correlation_pvalue": None if math.isnan(correlation_pvalue) else round(correlation_pvalue, 6),
         "mean_threshold_gap": round(mean_gap, 4),
         "cells": cells,
     }
@@ -127,15 +128,24 @@ def format_theorem_latex(model: DeferralCostModel) -> str:
     )
 
 
-def _pearson(xs: list[float], ys: list[float]) -> float:
+def _pearson(xs: list[float], ys: list[float]) -> tuple[float, float]:
+    """Return (correlation, p_value). Returns (NaN, NaN) for N < 3."""
     n = len(xs)
-    if n < 2:
-        return 0.0
+    if n < 3:
+        return float("nan"), float("nan")
     mean_x = sum(xs) / n
     mean_y = sum(ys) / n
     num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
-    den_x = math.sqrt(sum((x - mean_x) ** 2 for x in xs))
-    den_y = math.sqrt(sum((y - mean_y) ** 2 for y in ys))
+    den_x = sum((x - mean_x) ** 2 for x in xs) ** 0.5
+    den_y = sum((y - mean_y) ** 2 for y in ys) ** 0.5
     if den_x == 0 or den_y == 0:
-        return 0.0
-    return num / (den_x * den_y)
+        return 0.0, float("nan")
+    r = num / (den_x * den_y)
+    import math as _math
+    t_stat = r * _math.sqrt((n - 2) / max(1e-15, 1 - r * r))
+    try:
+        from scipy.stats import t as t_dist
+        p = float(2.0 * t_dist.sf(abs(t_stat), df=n - 2))
+    except ImportError:
+        p = float("nan")
+    return float(r), p

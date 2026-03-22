@@ -8,10 +8,13 @@ from pathlib import Path
 from defer.core.io import read_jsonl, write_json, write_jsonl
 from scripts.run_checkpoint_eval import run as run_checkpoint_eval_run
 
+_DEFAULT_EVAL_SEED = 42
+
 
 def _format_policy_templates(
     templates: list[str],
     seed: int,
+    allow_static_model_policy_templates: bool = False,
 ) -> list[str]:
     specs: list[str] = []
     for template in templates:
@@ -21,7 +24,16 @@ def _format_policy_templates(
                 "Expected format policy_name=/path/with/{seed}/placeholder"
             )
         name, path_template = template.split("=", 1)
-        specs.append(f"{name.strip()}={path_template.strip().format(seed=seed)}")
+        path_template = path_template.strip()
+        has_seed_placeholder = "{seed}" in path_template
+        if (not has_seed_placeholder) and (not allow_static_model_policy_templates):
+            raise ValueError(
+                f"Model policy template for '{name.strip()}' must include '{{seed}}' "
+                "to avoid silently reusing the same checkpoint across all sweep seeds. "
+                "Pass --allow-static-model-policy-templates to override."
+            )
+        path = path_template.format(seed=seed) if has_seed_placeholder else path_template
+        specs.append(f"{name.strip()}={path}")
     return specs
 
 
@@ -41,11 +53,13 @@ def run(
     max_new_tokens: int = 128,
     temperature: float = 0.0,
     top_p: float = 1.0,
+    allow_static_model_policy_templates: bool = False,
 ) -> None:
     payload = json.loads(seeds_config.read_text(encoding="utf-8"))
     seeds = list(payload.get("primary_model_seeds", [])) + list(
         payload.get("confirmatory_model_seeds", [])
     )
+    eval_seed = int(payload.get("eval_seed", _DEFAULT_EVAL_SEED))
     if not seeds:
         raise ValueError(f"No seeds found in {seeds_config}")
     if not model_policy_templates:
@@ -65,7 +79,11 @@ def run(
             repeats=repeats,
             seed=seed,
             max_scenarios=max_scenarios,
-            model_policies=_format_policy_templates(model_policy_templates, seed=seed),
+            model_policies=_format_policy_templates(
+                model_policy_templates,
+                seed=seed,
+                allow_static_model_policy_templates=allow_static_model_policy_templates,
+            ),
             include_baselines=[x.strip() for x in include_baselines.split(",") if x.strip()],
             fallback_policy_name=fallback_policy,
             domains=domains,
@@ -74,6 +92,7 @@ def run(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
+            sampling_seed=eval_seed,
         )
         merged_records.extend(read_jsonl(seed_dir / "reliability_records.jsonl"))
         merged_traces.extend(read_jsonl(seed_dir / "episode_traces.jsonl"))
@@ -156,6 +175,7 @@ def run(
             "repeats": repeats,
             "split": split,
             "model_policy_templates": model_policy_templates,
+            "allow_static_model_policy_templates": allow_static_model_policy_templates,
             "merged_records": len(merged_records),
             "merged_traces": len(merged_traces),
             "fallback_metrics_path": str(fallback_path) if fallback_rows_by_seed else None,
@@ -191,6 +211,11 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument(
+        "--allow-static-model-policy-templates",
+        action="store_true",
+        help="Allow templates without {seed}. This weakens model-seed sweep validity.",
+    )
     args = parser.parse_args()
     domains = {d.strip() for d in args.domains.split(",") if d.strip()} or None
     include_delay_mechanisms = (
@@ -215,6 +240,7 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
+        allow_static_model_policy_templates=args.allow_static_model_policy_templates,
     )
 
 

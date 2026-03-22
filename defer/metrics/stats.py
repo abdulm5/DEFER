@@ -94,10 +94,10 @@ def paired_cluster_bootstrap_diff(
     matched_keys = sorted(set(grouped_a).intersection(set(grouped_b)))
     if not matched_keys:
         return {
-            "diff_point": 0.0,
-            "ci_low": 0.0,
-            "ci_high": 0.0,
-            "p_value_two_sided": 1.0,
+            "diff_point": float("nan"),
+            "ci_low": float("nan"),
+            "ci_high": float("nan"),
+            "p_value_two_sided": float("nan"),
             "matched_clusters": 0,
         }
 
