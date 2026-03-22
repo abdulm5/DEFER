@@ -29,11 +29,14 @@ def create_calendar_event(state: WorldState, args: dict[str, Any]) -> ToolExecut
 
 def send_email(state: WorldState, args: dict[str, Any]) -> ToolExecutionResult:
     message_id = args.get("message_id", deterministic_id("msg"))
+    to_raw = args.get("to", [])
+    if isinstance(to_raw, str):
+        to_raw = [to_raw]
     email = EmailMessage(
         message_id=message_id,
         subject=args["subject"],
         body=args["body"],
-        to=args.get("to", []),
+        to=to_raw,
         sent=bool(args.get("send_now", False)),
     )
     state.emails[message_id] = email
