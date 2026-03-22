@@ -210,7 +210,27 @@ class SimulationEnvironment:
                 last_action = turn.selected_action
                 continue
 
-            tool_fn = TOOLS[tool_name]
+            tool_fn = TOOLS.get(tool_name)
+            if tool_fn is None:
+                invalid_commit = True
+                last_decision = VerificationDecision.REJECT
+                last_freshness = "stale"
+                last_confidence = 0.1
+                turn.observation = {"error": "unknown_tool", "tool_name": tool_name, "fault": fault}
+                turn.state_diff = {}
+                turn.irreversible_commit = scenario.expects_irreversible
+                turn.verifier_output = VerifierOutput(
+                    decision=VerificationDecision.REJECT,
+                    confidence=0.1,
+                    freshness=Freshness.STALE,
+                    pending_postconditions=[],
+                    pending_postcondition_reason=None,
+                    evidence_ids=[f"error:unknown_tool:{tool_name}"],
+                )
+                last_pending_reason = "unknown"
+                turns.append(turn)
+                last_action = turn.selected_action
+                continue
             try:
                 result = tool_fn(state, args_faulted)
             except KeyError:

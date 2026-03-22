@@ -35,6 +35,8 @@ def run_policies(
     )
     traces: list[EpisodeTrace] = []
     records: list[ReliabilityRecord] = []
+    total_episodes = len(policies) * len(scenario_list) * cfg.repeats
+    completed = 0
     for policy in policies:
         for scenario in scenario_list:
             for repeat_idx in range(cfg.repeats):
@@ -48,6 +50,15 @@ def run_policies(
                 )
                 traces.append(trace)
                 records.append(trace_to_record(trace=trace, k=repeat_idx + 1))
+                completed += 1
+                if completed % 100 == 0 or completed == total_episodes:
+                    print(
+                        f"\r  [{policy.name}] {completed}/{total_episodes} episodes "
+                        f"({100 * completed // total_episodes}%)",
+                        end="", flush=True,
+                    )
+    if total_episodes > 0:
+        print()
     return traces, records
 
 
