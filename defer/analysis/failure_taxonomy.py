@@ -101,10 +101,11 @@ def taxonomy_to_latex_table() -> str:
         r"\midrule",
     ]
     for mechanism, entry in sorted(REAL_WORLD_FAILURE_TAXONOMY.items()):
+        mechanism_tex = mechanism.replace("_", "\\_")
         desc = entry["description"][:80] + "..."
         example = entry["real_world_examples"][0] if entry["real_world_examples"] else "N/A"
         lines.append(
-            f"  {mechanism.replace('_', r'\\_')} & {entry['severity']} & {desc} & {example} \\\\"
+            f"  {mechanism_tex} & {entry['severity']} & {desc} & {example} \\\\"
         )
     lines.extend([
         r"\bottomrule",
