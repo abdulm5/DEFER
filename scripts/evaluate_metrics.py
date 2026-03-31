@@ -41,10 +41,22 @@ def run(
 
     protocol_payload = _load_protocol(protocol_path)
     write_json(output_dir / "evaluation_protocol_snapshot.json", protocol_payload)
+    candidate = fallback_metrics_path or (records_path.parent / "fallback_metrics.csv")
+    fallback_exists = candidate is not None and candidate.exists()
     fallback_df = _load_fallback_metrics(
         records_path=records_path,
         fallback_metrics_path=fallback_metrics_path,
     )
+
+    if strict_coverage and records:
+        if not fallback_exists:
+            raise FileNotFoundError(
+                f"Strict coverage requires fallback metrics, but none found at: {candidate}"
+            )
+        if fallback_df.empty:
+            raise ValueError(
+                f"Strict coverage requires non-empty fallback metrics at: {candidate}"
+            )
 
     table = summary_table(records)
     table = _attach_fallback_metrics(table, fallback_df)
@@ -76,7 +88,7 @@ def run(
         output_dir=output_dir,
         min_episodes_per_cell=min_episodes_per_cell,
         strict_coverage=strict_coverage,
-        protocol=protocol_payload,
+        fallback_df=fallback_df,
     )
 
     if not records:
@@ -208,7 +220,18 @@ def run(
 
     claim_gate = _compute_claim_gates(ci_df)
     write_json(output_dir / "claim_gates.json", claim_gate)
-    pairwise_df = _pairwise_significance(records=records, bootstrap_resamples=bootstrap_resamples, seed=seed, protocol=protocol_payload)
+    pairwise_df = _pairwise_significance(
+        records=records,
+        bootstrap_resamples=bootstrap_resamples,
+        seed=seed,
+        protocol=protocol_payload,
+    )
+    if strict_coverage:
+        _assert_protocol_pairwise_completeness(
+            pairwise_df=pairwise_df,
+            protocol=protocol_payload,
+            required_metrics=("AURS", "DCS"),
+        )
     pairwise_df.to_csv(output_dir / "pairwise_tests.csv", index=False)
     print(f"Wrote metrics to {output_dir}")
 
@@ -322,7 +345,7 @@ def _write_cell_coverage(
     output_dir: Path,
     min_episodes_per_cell: int,
     strict_coverage: bool,
-    protocol: dict | None = None,
+    fallback_df: pd.DataFrame | None = None,
 ) -> None:
     if not records:
         pd.DataFrame(
@@ -335,13 +358,11 @@ def _write_cell_coverage(
         .size()
         .rename(columns={"policy_name": "policy", "size": "episode_count"})
     )
-    policies = sorted(set(coverage_present["policy"]))
-    if protocol and protocol.get("exists"):
-        comparisons = protocol.get("payload", {}).get("comparisons", [])
-        required_policies: set[str] = set()
-        for pair in comparisons:
-            required_policies.update(pair)
-        policies = sorted(set(policies) | required_policies)
+    observed_policies = set(coverage_present["policy"])
+    # Use fallback_metrics (written before validation) as the intended policy set.
+    # This catches policies that were run but produced 0 eval records.
+    intended_policies = set(fallback_df["policy"]) if fallback_df is not None and not fallback_df.empty else set()
+    policies = sorted(observed_policies | intended_policies)
     domains = sorted(set(DOMAIN_TEMPLATES.keys()).union(set(df["domain"].unique())))
     epsilons = sorted(set(float(x) for x in EPSILON_GRID).union(set(float(x) for x in df["epsilon"].unique())))
     lambdas = sorted(
@@ -486,6 +507,56 @@ def _pairwise_significance(
     for row, adj_p in zip(rows, adjusted_ps):
         row["adjusted_p_value"] = adj_p
     return pd.DataFrame(rows)
+
+
+def _expected_comparisons_from_protocol(protocol: dict | None) -> list[tuple[str, str]]:
+    if not protocol or not protocol.get("exists"):
+        return []
+    comparisons_raw = protocol.get("payload", {}).get("comparisons", [])
+    comparisons: list[tuple[str, str]] = []
+    for pair in comparisons_raw:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        policy_a = str(pair[0]).strip()
+        policy_b = str(pair[1]).strip()
+        if not policy_a or not policy_b:
+            continue
+        comparisons.append((policy_a, policy_b))
+    return comparisons
+
+
+def _assert_protocol_pairwise_completeness(
+    pairwise_df: pd.DataFrame,
+    protocol: dict | None,
+    required_metrics: tuple[str, ...] = ("AURS", "DCS"),
+) -> None:
+    expected_pairs = _expected_comparisons_from_protocol(protocol)
+    if not expected_pairs:
+        return
+    present = set()
+    if not pairwise_df.empty:
+        present = {
+            (
+                str(row["metric"]),
+                str(row["policy_a"]),
+                str(row["policy_b"]),
+            )
+            for _, row in pairwise_df.iterrows()
+        }
+    missing: list[tuple[str, str, str]] = []
+    for policy_a, policy_b in expected_pairs:
+        for metric in required_metrics:
+            if (metric, policy_a, policy_b) not in present:
+                missing.append((metric, policy_a, policy_b))
+    if missing:
+        missing_lines = "\n".join(
+            f"  - metric={metric}, policy_a={policy_a}, policy_b={policy_b}"
+            for metric, policy_a, policy_b in missing
+        )
+        raise ValueError(
+            "Protocol pairwise completeness check failed. Missing expected comparisons:\n"
+            f"{missing_lines}"
+        )
 
 
 def _load_protocol(protocol_path: Path) -> dict:

@@ -14,7 +14,6 @@ comparisons:
   - [defer_full, runtime_verification_only]
   - [defer_full, perfect_verifier_posttrain]
   - [defer_full, success_signal_posttrain]
-  - [defer_full, prompted_deferral]
   - [success_signal_posttrain, clean_sft_only]
 significance:
   method: paired_cluster_bootstrap

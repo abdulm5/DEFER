@@ -5,4 +5,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 artifacts/
+test_run_qwen25/
 *.egg-info/
+
+# Editor / OS
+.DS_Store
+CLAUDE.md

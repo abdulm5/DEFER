@@ -270,8 +270,12 @@ def run(
         writer.writeheader()
         writer.writerows(fallback_rows)
 
+    fallback_gate_error: Exception | None = None
     if max_fallback_rate is not None:
-        _validate_fallback_rates(fallback_rows, max_fallback_rate)
+        try:
+            _validate_fallback_rates(fallback_rows, max_fallback_rate)
+        except Exception as exc:
+            fallback_gate_error = exc
 
     write_json(
         output_dir / "run_meta.json",
@@ -291,10 +295,15 @@ def run(
             "policies": policy_names_for_fallback,
             "model_policies": model_stats,
             "fallback_metrics_path": str(fallback_path),
+            "max_fallback_rate": max_fallback_rate,
+            "fallback_gate_passed": fallback_gate_error is None,
+            "fallback_gate_error": str(fallback_gate_error) if fallback_gate_error is not None else None,
             "traces": len(traces),
             "records": len(records),
         },
     )
+    if fallback_gate_error is not None:
+        raise fallback_gate_error
     print(f"Wrote {len(traces)} traces and {len(records)} records to {output_dir}")
 
 

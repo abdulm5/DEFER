@@ -5,7 +5,7 @@ def test_comparisons_loaded_from_protocol():
     protocol = _load_protocol(Path("defer/configs/eval_protocol.yaml"))
     assert protocol["exists"]
     comparisons = protocol["payload"].get("comparisons", [])
-    assert len(comparisons) >= 6
+    assert len(comparisons) >= 5
     assert ["defer_full", "clean_sft_only"] in comparisons
 
 

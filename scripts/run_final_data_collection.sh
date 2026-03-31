@@ -587,13 +587,29 @@ if [[ "$RUN_API_BASELINE" == "1" ]]; then
   fi
 fi
 
-# Use seed_sweep_metrics if available, otherwise fall back to main_metrics.
-if [[ -f "$RUN_DIR/checkpoint_eval/seed_sweep_metrics/claim_gates.json" ]]; then
+# Select claim gate artifacts deterministically by run mode.
+if [[ "$TRAIN_SEED_SWEEP" == "1" ]]; then
   CLAIM_GATES_DIR="$RUN_DIR/checkpoint_eval/seed_sweep_metrics"
   FALLBACK_CSV="$RUN_DIR/checkpoint_eval/seed_sweep/fallback_metrics.csv"
+  if [[ ! -f "$CLAIM_GATES_DIR/claim_gates.json" ]]; then
+    log "Missing seed sweep claim gates: $CLAIM_GATES_DIR/claim_gates.json"
+    exit 13
+  fi
+  if [[ ! -f "$FALLBACK_CSV" ]]; then
+    log "Missing seed sweep fallback metrics: $FALLBACK_CSV"
+    exit 14
+  fi
 else
   CLAIM_GATES_DIR="$RUN_DIR/checkpoint_eval/main_metrics"
   FALLBACK_CSV="$RUN_DIR/checkpoint_eval/main/fallback_metrics.csv"
+  if [[ ! -f "$CLAIM_GATES_DIR/claim_gates.json" ]]; then
+    log "Missing main claim gates: $CLAIM_GATES_DIR/claim_gates.json"
+    exit 15
+  fi
+  if [[ ! -f "$FALLBACK_CSV" ]]; then
+    log "Missing main fallback metrics: $FALLBACK_CSV"
+    exit 16
+  fi
 fi
 
 log "Final claim gates:"
