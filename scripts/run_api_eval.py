@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
+from typing import Iterable
 
 from defer.baselines.api_policy import APIInferenceConfig, OpenAIChatPolicy
 from defer.baselines.policies import policy_registry
@@ -70,6 +71,20 @@ def _parse_api_specs(items: list[str]) -> list[tuple[str, str]]:
     return specs
 
 
+def _parse_query_params(items: Iterable[str]) -> dict[str, str]:
+    params: dict[str, str] = {}
+    for item in items:
+        if "=" not in item:
+            raise ValueError(f"Invalid --query-param '{item}'. Expected format key=value")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise ValueError(f"Invalid --query-param '{item}'. Key must be non-empty.")
+        params[key] = value
+    return params
+
+
 def run(
     variants: Path,
     output_dir: Path,
@@ -89,6 +104,12 @@ def run(
     temperature: float = 0.0,
     top_p: float = 1.0,
     timeout_seconds: int = 60,
+    auth_mode: str = "bearer",
+    api_key_header: str = "api-key",
+    query_params: dict[str, str] | None = None,
+    max_retries: int = 3,
+    retry_backoff_seconds: float = 1.0,
+    retry_max_backoff_seconds: float = 8.0,
     system_prompt_override: str | None = None,
     sampling_seed: int | None = None,
 ) -> None:
@@ -150,6 +171,12 @@ def run(
                 temperature=temperature,
                 top_p=top_p,
                 timeout_seconds=timeout_seconds,
+                auth_mode=auth_mode,
+                api_key_header=api_key_header,
+                query_params=query_params,
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+                retry_max_backoff_seconds=retry_max_backoff_seconds,
             ),
             **extra_kwargs,
         )
@@ -214,6 +241,21 @@ def run(
             "seed": seed,
             "policies": [policy.name for policy in policies],
             "api_policies": policy_stats,
+            "api_transport": {
+                "api_key_env": api_key_env,
+                "base_url": base_url,
+                "auth_mode": auth_mode,
+                "api_key_header": api_key_header,
+                "query_params": query_params or {},
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+                "timeout_seconds": timeout_seconds,
+                "max_retries": max_retries,
+                "retry_backoff_seconds": retry_backoff_seconds,
+                "retry_max_backoff_seconds": retry_max_backoff_seconds,
+                "sampling_seed": sampling_seed if sampling_seed is not None else seed,
+            },
             "fallback_metrics_path": str(fallback_path),
             "traces": len(traces),
             "records": len(records),
@@ -245,6 +287,14 @@ def main() -> None:
     parser.add_argument("--fallback-policy", type=str, default="runtime_verification_only")
     parser.add_argument("--api-key-env", type=str, default="OPENAI_API_KEY")
     parser.add_argument("--base-url", type=str, default="https://api.openai.com/v1/chat/completions")
+    parser.add_argument("--auth-mode", type=str, choices=["bearer", "api_key"], default="bearer")
+    parser.add_argument("--api-key-header", type=str, default="api-key")
+    parser.add_argument(
+        "--query-param",
+        action="append",
+        default=[],
+        help="Repeatable. Format key=value. Appended as query parameters to --base-url.",
+    )
     parser.add_argument("--domains", type=str, default="")
     parser.add_argument("--include-delay-mechanisms", type=str, default="")
     parser.add_argument("--exclude-delay-mechanisms", type=str, default="")
@@ -252,6 +302,9 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--timeout-seconds", type=int, default=60)
+    parser.add_argument("--max-retries", type=int, default=3)
+    parser.add_argument("--retry-backoff-seconds", type=float, default=1.0)
+    parser.add_argument("--retry-max-backoff-seconds", type=float, default=8.0)
     parser.add_argument(
         "--system-prompt-override",
         type=str,
@@ -269,6 +322,7 @@ def main() -> None:
         {m.strip() for m in args.exclude_delay_mechanisms.split(",") if m.strip()} or None
     )
     include_baselines = [x.strip() for x in args.include_baselines.split(",") if x.strip()]
+    query_params = _parse_query_params(args.query_param)
     run(
         variants=args.variants,
         output_dir=args.output_dir,
@@ -281,6 +335,9 @@ def main() -> None:
         fallback_policy_name=args.fallback_policy,
         api_key_env=args.api_key_env,
         base_url=args.base_url,
+        auth_mode=args.auth_mode,
+        api_key_header=args.api_key_header,
+        query_params=query_params,
         domains=domains,
         include_delay_mechanisms=include_delay_mechanisms,
         exclude_delay_mechanisms=exclude_delay_mechanisms,
@@ -288,6 +345,9 @@ def main() -> None:
         temperature=args.temperature,
         top_p=args.top_p,
         timeout_seconds=args.timeout_seconds,
+        max_retries=args.max_retries,
+        retry_backoff_seconds=args.retry_backoff_seconds,
+        retry_max_backoff_seconds=args.retry_max_backoff_seconds,
         system_prompt_override=args.system_prompt_override,
         sampling_seed=args.sampling_seed,
     )

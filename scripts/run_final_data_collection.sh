@@ -23,10 +23,16 @@ SKIP_TO_POST_SFT="${SKIP_TO_POST_SFT:-0}"
 RUN_API_BASELINE="${RUN_API_BASELINE:-0}"
 API_BASE_URL="${API_BASE_URL:-https://api.openai.com/v1/chat/completions}"
 API_KEY_ENV="${API_KEY_ENV:-OPENAI_API_KEY}"
+API_AUTH_MODE="${API_AUTH_MODE:-bearer}"
+API_KEY_HEADER="${API_KEY_HEADER:-api-key}"
+API_QUERY_PARAM="${API_QUERY_PARAM:-}"
 API_MODEL="${API_MODEL:-gpt-4o}"
 API_POLICY_NAME="${API_POLICY_NAME:-frontier_zero_shot}"
 API_REPEATS="${API_REPEATS:-3}"
 API_MAX_SCENARIOS="${API_MAX_SCENARIOS:-1000}"
+API_MAX_RETRIES="${API_MAX_RETRIES:-3}"
+API_RETRY_BACKOFF_SECONDS="${API_RETRY_BACKOFF_SECONDS:-1.0}"
+API_RETRY_MAX_BACKOFF_SECONDS="${API_RETRY_MAX_BACKOFF_SECONDS:-8.0}"
 TRAIN_SEED_SWEEP="${TRAIN_SEED_SWEEP:-1}"
 
 if [[ "$SKIP_TO_POST_SFT" == "1" && "$CLEAN_OLD" == "1" ]]; then
@@ -545,16 +551,27 @@ if [[ "$RUN_API_BASELINE" == "1" ]]; then
   if [[ -z "${!API_KEY_ENV:-}" ]]; then
     log "RUN_API_BASELINE=1 but ${API_KEY_ENV} is not set. Skipping API baseline."
   else
+    API_QUERY_ARGS=()
+    if [[ -n "$API_QUERY_PARAM" ]]; then
+      API_QUERY_ARGS=(--query-param "$API_QUERY_PARAM")
+    fi
     run python -m scripts.run_api_eval \
       --variants "$RUN_DIR/data/variant_tasks.jsonl" \
       --output-dir "$RUN_DIR/api_eval/openai_main" \
       --split "$EVAL_SPLIT" \
       --repeats "$API_REPEATS" \
       --seed "$SEED" \
+      --sampling-seed "$SEED" \
       --max-scenarios "$API_MAX_SCENARIOS" \
       --include-baselines runtime_verification_only \
       --api-key-env "$API_KEY_ENV" \
       --base-url "$API_BASE_URL" \
+      --auth-mode "$API_AUTH_MODE" \
+      --api-key-header "$API_KEY_HEADER" \
+      "${API_QUERY_ARGS[@]}" \
+      --max-retries "$API_MAX_RETRIES" \
+      --retry-backoff-seconds "$API_RETRY_BACKOFF_SECONDS" \
+      --retry-max-backoff-seconds "$API_RETRY_MAX_BACKOFF_SECONDS" \
       --api-policy "${API_POLICY_NAME}=${API_MODEL}"
 
     run python -m scripts.evaluate_metrics \
@@ -570,10 +587,17 @@ if [[ "$RUN_API_BASELINE" == "1" ]]; then
       --variants "$RUN_DIR/data/variant_tasks.jsonl" \
       --output-dir "$RUN_DIR/api_eval/prompted_deferral" \
       --split "$EVAL_SPLIT" --repeats "$API_REPEATS" --seed "$SEED" \
+      --sampling-seed "$SEED" \
       --max-scenarios "$API_MAX_SCENARIOS" \
       --include-baselines runtime_verification_only \
       --api-key-env "$API_KEY_ENV" \
       --base-url "$API_BASE_URL" \
+      --auth-mode "$API_AUTH_MODE" \
+      --api-key-header "$API_KEY_HEADER" \
+      "${API_QUERY_ARGS[@]}" \
+      --max-retries "$API_MAX_RETRIES" \
+      --retry-backoff-seconds "$API_RETRY_BACKOFF_SECONDS" \
+      --retry-max-backoff-seconds "$API_RETRY_MAX_BACKOFF_SECONDS" \
       --api-policy "prompted_deferral=${API_MODEL}" \
       --system-prompt-override prompted_deferral
 

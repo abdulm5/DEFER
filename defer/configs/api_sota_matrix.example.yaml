@@ -1,0 +1,45 @@
+defaults:
+  variants: artifacts/final_run_v1/data/variant_tasks.jsonl
+  split: test
+  repeats: 3
+  seed: 42
+  sampling_seed: 42
+  max_scenarios: 1000
+  include_baselines:
+    - runtime_verification_only
+  fallback_policy: runtime_verification_only
+  max_new_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+  timeout_seconds: 60
+  auth_mode: api_key
+  api_key_header: api-key
+  query_params:
+    api-version: "2024-10-21"
+  max_retries: 3
+  retry_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 8.0
+  bootstrap_resamples: 5000
+  min_episodes_per_cell: 100
+  strict_coverage: false
+
+models:
+  - id: gpt_4o
+    model: gpt-4o
+    base_url: https://YOUR-RESOURCE.openai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_OPENAI_API_KEY
+    zero_shot_policy_name: frontier_gpt4o_zero_shot
+    prompted_policy_name: prompted_deferral
+    run_zero_shot: true
+    run_prompted_deferral: true
+
+  - id: claude_sonnet
+    model: claude-sonnet
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    auth_mode: api_key
+    api_key_header: api-key
+    query_params:
+      api-version: "2024-10-21"
+    run_zero_shot: true
+    run_prompted_deferral: true

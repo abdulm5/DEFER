@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -83,11 +84,83 @@ def _check_protocol_pairwise(
         errors.append(str(exc))
 
 
+def _check_api_sota_dir(
+    api_sota_dir: Path,
+    max_fallback_rate: float,
+    errors: list[str],
+) -> None:
+    manifest_path = api_sota_dir / "matrix_manifest.json"
+    summary_path = api_sota_dir / "matrix_summary.csv"
+    _require_file(manifest_path, errors)
+    _require_file(summary_path, errors)
+    if not manifest_path.exists():
+        return
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    jobs = manifest.get("jobs", [])
+    if not isinstance(jobs, list) or not jobs:
+        errors.append(f"API SOTA manifest has no jobs: {manifest_path}")
+        return
+
+    failed_jobs = [job for job in jobs if str(job.get("status")) != "success"]
+    if failed_jobs:
+        errors.append(
+            f"API SOTA matrix contains failed jobs: {len(failed_jobs)} "
+            f"(see {manifest_path})"
+        )
+
+    sampling_seeds: set[int] = set()
+    scenario_counts: set[int] = set()
+    for job in jobs:
+        if str(job.get("status")) != "success":
+            continue
+        variants = job.get("variants", [])
+        if not isinstance(variants, list) or not variants:
+            errors.append(f"API SOTA job has no variants: {job.get('model_id')}")
+            continue
+        for variant in variants:
+            run_meta = Path(str(variant.get("run_meta", "")))
+            fallback_metrics = Path(str(variant.get("fallback_metrics", "")))
+            pairwise_tests = Path(str(variant.get("pairwise_tests", "")))
+            reliability_records = Path(str(variant.get("output_dir", ""))) / "reliability_records.jsonl"
+
+            _require_file(run_meta, errors)
+            _require_file(reliability_records, errors)
+            _require_file(fallback_metrics, errors)
+            _require_file(pairwise_tests, errors)
+
+            if fallback_metrics.exists():
+                _check_fallback_threshold(fallback_metrics, threshold=max_fallback_rate, errors=errors)
+
+            if run_meta.exists():
+                payload = json.loads(run_meta.read_text(encoding="utf-8"))
+                if "sampling_seed" in payload:
+                    try:
+                        sampling_seeds.add(int(payload["sampling_seed"]))
+                    except (TypeError, ValueError):
+                        errors.append(f"Invalid sampling_seed in {run_meta}: {payload.get('sampling_seed')}")
+                if "scenarios" in payload:
+                    try:
+                        scenario_counts.add(int(payload["scenarios"]))
+                    except (TypeError, ValueError):
+                        errors.append(f"Invalid scenarios count in {run_meta}: {payload.get('scenarios')}")
+
+    if len(sampling_seeds) > 1:
+        errors.append(
+            f"Inconsistent API SOTA sampling_seed values: {sorted(sampling_seeds)}"
+        )
+    if len(scenario_counts) > 1:
+        errors.append(
+            f"Inconsistent API SOTA scenario counts across models: {sorted(scenario_counts)}"
+        )
+
+
 def run(
     run_dir: Path,
     protocol_path: Path,
     max_fallback_rate: float,
     require_seed_sweep: bool,
+    api_sota_dir: Path | None = None,
 ) -> None:
     errors: list[str] = []
 
@@ -150,6 +223,13 @@ def run(
     for path in fallback_paths:
         _check_fallback_threshold(path, threshold=max_fallback_rate, errors=errors)
 
+    if api_sota_dir is not None:
+        _check_api_sota_dir(
+            api_sota_dir=api_sota_dir,
+            max_fallback_rate=max_fallback_rate,
+            errors=errors,
+        )
+
     if errors:
         print("Paper integrity check failed:")
         for err in errors:
@@ -168,12 +248,19 @@ def main() -> None:
     )
     parser.add_argument("--max-fallback-rate", type=float, default=0.10)
     parser.add_argument("--require-seed-sweep", action="store_true")
+    parser.add_argument(
+        "--api-sota-dir",
+        type=Path,
+        default=None,
+        help="Optional supplementary API SOTA matrix directory to validate.",
+    )
     args = parser.parse_args()
     run(
         run_dir=args.run_dir,
         protocol_path=args.protocol_path,
         max_fallback_rate=args.max_fallback_rate,
         require_seed_sweep=args.require_seed_sweep,
+        api_sota_dir=args.api_sota_dir,
     )
 
 

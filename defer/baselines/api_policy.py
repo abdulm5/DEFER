@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
 from defer.baselines.model_policy import parse_policy_decision_text
@@ -18,6 +21,12 @@ class APIInferenceConfig:
     temperature: float = 0.0
     top_p: float = 1.0
     timeout_seconds: int = 60
+    auth_mode: str = "bearer"
+    api_key_header: str = "api-key"
+    query_params: dict[str, str] | None = None
+    max_retries: int = 3
+    retry_backoff_seconds: float = 1.0
+    retry_max_backoff_seconds: float = 8.0
 
 
 def _build_prompt(context: dict[str, Any]) -> str:
@@ -74,11 +83,73 @@ class OpenAIChatPolicy:
         self.parse_failures = 0
         self.api_errors = 0
         self.fallback_calls = 0
+        self.http_requests_total = 0
+        self.http_retry_count = 0
+        self.http_429_count = 0
+        self.http_5xx_count = 0
+        self.last_http_status: int | None = None
+        self.prompt_tokens_total = 0
+        self.completion_tokens_total = 0
+        self.total_tokens_total = 0
 
         api_key = os.environ.get(api_key_env)
         if not api_key:
             raise RuntimeError(f"Missing API key env var: {api_key_env}")
         self.api_key = api_key
+        if self.inference.auth_mode not in {"bearer", "api_key"}:
+            raise ValueError(
+                f"Unsupported auth_mode '{self.inference.auth_mode}'. "
+                "Expected one of: bearer, api_key."
+            )
+        if self.inference.auth_mode == "api_key" and not self.inference.api_key_header:
+            raise ValueError("api_key auth_mode requires a non-empty api_key_header.")
+
+    def _compose_url(self) -> str:
+        parts = urlsplit(self.base_url)
+        existing = dict(parse_qsl(parts.query, keep_blank_values=True))
+        for key, value in (self.inference.query_params or {}).items():
+            existing[str(key)] = str(value)
+        new_query = urlencode(existing)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+    @staticmethod
+    def _extract_content(message_content: Any) -> str:
+        if isinstance(message_content, str):
+            return message_content
+        if isinstance(message_content, list):
+            chunks: list[str] = []
+            for item in message_content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        chunks.append(text)
+            return "\n".join(chunks).strip()
+        return ""
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.inference.auth_mode == "api_key":
+            headers[self.inference.api_key_header] = self.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _register_usage(self, data: dict[str, Any]) -> None:
+        usage = data.get("usage", {})
+        if not isinstance(usage, dict):
+            return
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        total_tokens = usage.get("total_tokens")
+        if isinstance(prompt_tokens, int):
+            self.prompt_tokens_total += prompt_tokens
+        if isinstance(completion_tokens, int):
+            self.completion_tokens_total += completion_tokens
+        if isinstance(total_tokens, int):
+            self.total_tokens_total += total_tokens
+
+    def _should_retry(self, status_code: int) -> bool:
+        return status_code == 429 or 500 <= status_code < 600
 
     def _invoke(self, user_prompt: str) -> str:
         payload = {
@@ -91,24 +162,54 @@ class OpenAIChatPolicy:
             "top_p": self.inference.top_p,
             "max_tokens": self.inference.max_new_tokens,
         }
-        req = urllib.request.Request(
-            self.base_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=self.inference.timeout_seconds) as response:
-            body = response.read().decode("utf-8")
-        data = json.loads(body)
-        choices = data.get("choices", [])
-        if not choices:
-            return ""
-        message = choices[0].get("message", {})
-        content = message.get("content", "")
-        return content if isinstance(content, str) else ""
+        url = self._compose_url()
+        max_attempts = max(1, int(self.inference.max_retries) + 1)
+        request_data = json.dumps(payload).encode("utf-8")
+
+        for attempt in range(max_attempts):
+            req = urllib.request.Request(
+                url,
+                data=request_data,
+                headers=self._headers(),
+                method="POST",
+            )
+            self.http_requests_total += 1
+            try:
+                with urllib.request.urlopen(req, timeout=self.inference.timeout_seconds) as response:
+                    self.last_http_status = int(response.status)
+                    body = response.read().decode("utf-8")
+                data = json.loads(body)
+                self._register_usage(data)
+                choices = data.get("choices", [])
+                if not choices:
+                    return ""
+                message = choices[0].get("message", {})
+                return self._extract_content(message.get("content", ""))
+            except urllib.error.HTTPError as exc:
+                self.last_http_status = int(exc.code)
+                if exc.code == 429:
+                    self.http_429_count += 1
+                if 500 <= exc.code < 600:
+                    self.http_5xx_count += 1
+                if attempt >= max_attempts - 1 or not self._should_retry(exc.code):
+                    raise
+                self.http_retry_count += 1
+                backoff = min(
+                    self.inference.retry_max_backoff_seconds,
+                    self.inference.retry_backoff_seconds * (2**attempt),
+                )
+                time.sleep(backoff + random.uniform(0.0, min(0.25, backoff * 0.1)))
+            except urllib.error.URLError:
+                self.last_http_status = None
+                if attempt >= max_attempts - 1:
+                    raise
+                self.http_retry_count += 1
+                backoff = min(
+                    self.inference.retry_max_backoff_seconds,
+                    self.inference.retry_backoff_seconds * (2**attempt),
+                )
+                time.sleep(backoff + random.uniform(0.0, min(0.25, backoff * 0.1)))
+        return ""
 
     def decide(self, context: dict[str, Any]) -> PolicyDecision:
         self.total_decisions += 1
@@ -136,9 +237,20 @@ class OpenAIChatPolicy:
             "policy_name": self.name,
             "model": self.model,
             "base_url": self.base_url,
+            "auth_mode": self.inference.auth_mode,
+            "api_key_header": self.inference.api_key_header,
+            "query_params": self.inference.query_params or {},
             "total_decisions": self.total_decisions,
             "parse_failures": self.parse_failures,
             "api_errors": self.api_errors,
             "fallback_calls": self.fallback_calls,
             "parse_failure_rate": self.parse_failures / max(1, self.total_decisions),
+            "http_requests_total": self.http_requests_total,
+            "http_retry_count": self.http_retry_count,
+            "http_429_count": self.http_429_count,
+            "http_5xx_count": self.http_5xx_count,
+            "last_http_status": self.last_http_status,
+            "prompt_tokens_total": self.prompt_tokens_total,
+            "completion_tokens_total": self.completion_tokens_total,
+            "total_tokens_total": self.total_tokens_total,
         }
