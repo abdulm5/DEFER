@@ -41,5 +41,9 @@ models:
     api_key_header: api-key
     query_params:
       api-version: "2024-10-21"
+    # Disable extended thinking for eval parity / cost control.
+    extra_body:
+      thinking:
+        type: disabled
     run_zero_shot: true
     run_prompted_deferral: true

@@ -1,0 +1,52 @@
+# Sonnet-only DEFER run for NeurIPS (thinking disabled)
+#
+# Fill before running:
+# - Replace YOUR-RESOURCE in base_url
+# - export AZURE_FOUNDRY_API_KEY=...
+
+defaults:
+  variants: test_run_qwen25/data/variant_tasks.jsonl
+  split: test
+  repeats: 3
+  seed: 42
+  sampling_seed: 42
+  max_scenarios: 1000
+
+  include_baselines:
+    - runtime_verification_only
+  fallback_policy: runtime_verification_only
+
+  max_new_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+  timeout_seconds: 60
+
+  auth_mode: api_key
+  api_key_header: x-api-key
+  extra_headers:
+    anthropic-version: "2023-06-01"
+
+  max_retries: 3
+  retry_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 8.0
+
+  bootstrap_resamples: 5000
+  min_episodes_per_cell: 100
+  strict_coverage: false
+
+models:
+  - id: claude_sonnet_46
+    model: claude-sonnet-4-6
+    base_url: https://waldo4865-1419-resource.services.ai.azure.com/anthropic/v1/messages
+    api_key_env: AZURE_FOUNDRY_API_KEY
+
+    # Foundry Claude supports thinking types enabled|disabled|adaptive.
+    # NeurIPS run setting: disable thinking.
+    extra_body:
+      thinking:
+        type: disabled
+
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: claude_sonnet_46_zero_shot
+    prompted_policy_name: prompted_deferral

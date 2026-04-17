@@ -16,6 +16,31 @@ If your endpoint requires an API version query parameter, pass:
 - `--query-param api-version=2024-10-21` in `run_api_eval`, or
 - `query_params: { api-version: "2024-10-21" }` in matrix config.
 
+For Claude via Anthropic Messages endpoint (`.../anthropic/v1/messages`), use:
+
+- API key header: `x-api-key`
+- extra header: `anthropic-version: 2023-06-01`
+
+## Disabling thinking (Claude)
+
+For Claude deployments where you want thinking disabled (for parity/cost control), pass provider-specific
+request fields:
+
+- `run_api_eval`: `--extra-body-json '{"thinking":{"type":"disabled"}}'`
+- `run_api_eval` with Anthropic headers:
+  - `--api-key-header x-api-key`
+  - `--header anthropic-version=2023-06-01`
+- matrix config:
+
+```yaml
+models:
+  - id: claude_sonnet_46
+    model: claude-sonnet-4-6
+    extra_body:
+      thinking:
+        type: disabled
+```
+
 ## Authentication modes
 
 Two auth modes are supported:

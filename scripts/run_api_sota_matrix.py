@@ -23,6 +23,14 @@ def _as_str_dict(payload: dict[str, Any] | None) -> dict[str, str]:
     return {str(key): str(value) for key, value in payload.items()}
 
 
+def _as_object_dict(payload: Any) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected mapping for extra_body, got: {type(payload).__name__}")
+    return {str(key): value for key, value in payload.items()}
+
+
 def _as_string_list(value: Any, default: list[str]) -> list[str]:
     if value is None:
         return default
@@ -59,7 +67,9 @@ class MatrixRuntimeConfig:
     timeout_seconds: int
     auth_mode: str
     api_key_header: str
+    extra_headers: dict[str, str]
     query_params: dict[str, str]
+    extra_body: dict[str, Any]
     max_retries: int
     retry_backoff_seconds: float
     retry_max_backoff_seconds: float
@@ -100,7 +110,9 @@ def _load_runtime_config(
         timeout_seconds=int(defaults.get("timeout_seconds", 60)),
         auth_mode=str(defaults.get("auth_mode", "api_key")),
         api_key_header=str(defaults.get("api_key_header", "api-key")),
+        extra_headers=_as_str_dict(defaults.get("extra_headers")),
         query_params=_as_str_dict(defaults.get("query_params")),
+        extra_body=_as_object_dict(defaults.get("extra_body")),
         max_retries=int(defaults.get("max_retries", 3)),
         retry_backoff_seconds=float(defaults.get("retry_backoff_seconds", 1.0)),
         retry_max_backoff_seconds=float(defaults.get("retry_max_backoff_seconds", 8.0)),
@@ -127,7 +139,9 @@ def _run_variant(
     api_key_env: str,
     auth_mode: str,
     api_key_header: str,
+    extra_headers: dict[str, str],
     query_params: dict[str, str],
+    extra_body: dict[str, Any],
     system_prompt_override: str | None,
     variant_label: str,
 ) -> dict[str, Any]:
@@ -146,7 +160,9 @@ def _run_variant(
         base_url=base_url,
         auth_mode=auth_mode,
         api_key_header=api_key_header,
+        extra_headers=extra_headers,
         query_params=query_params,
+        extra_body=extra_body,
         max_new_tokens=runtime.max_new_tokens,
         temperature=runtime.temperature,
         top_p=runtime.top_p,
@@ -204,8 +220,12 @@ def _run_model_job(
 
     auth_mode = str(model_spec.get("auth_mode", runtime.auth_mode))
     api_key_header = str(model_spec.get("api_key_header", runtime.api_key_header))
+    extra_headers = dict(runtime.extra_headers)
+    extra_headers.update(_as_str_dict(model_spec.get("extra_headers")))
     query_params = dict(runtime.query_params)
     query_params.update(_as_str_dict(model_spec.get("query_params")))
+    extra_body = dict(runtime.extra_body)
+    extra_body.update(_as_object_dict(model_spec.get("extra_body")))
 
     run_zero_shot = bool(model_spec.get("run_zero_shot", True))
     run_prompted = bool(model_spec.get("run_prompted_deferral", True))
@@ -224,7 +244,9 @@ def _run_model_job(
                 api_key_env=api_key_env,
                 auth_mode=auth_mode,
                 api_key_header=api_key_header,
+                extra_headers=extra_headers,
                 query_params=query_params,
+                extra_body=extra_body,
                 system_prompt_override=None,
                 variant_label="zero_shot",
             )
@@ -240,7 +262,9 @@ def _run_model_job(
                 api_key_env=api_key_env,
                 auth_mode=auth_mode,
                 api_key_header=api_key_header,
+                extra_headers=extra_headers,
                 query_params=query_params,
+                extra_body=extra_body,
                 system_prompt_override="prompted_deferral",
                 variant_label="prompted_deferral",
             )
@@ -254,7 +278,9 @@ def _run_model_job(
         "api_key_env": api_key_env,
         "auth_mode": auth_mode,
         "api_key_header": api_key_header,
+        "extra_headers": extra_headers,
         "query_params": query_params,
+        "extra_body": extra_body,
         "variants": variants,
     }
 
@@ -378,7 +404,9 @@ def run(
             "timeout_seconds": runtime.timeout_seconds,
             "auth_mode": runtime.auth_mode,
             "api_key_header": runtime.api_key_header,
+            "extra_headers": runtime.extra_headers,
             "query_params": runtime.query_params,
+            "extra_body": runtime.extra_body,
             "max_retries": runtime.max_retries,
             "retry_backoff_seconds": runtime.retry_backoff_seconds,
             "retry_max_backoff_seconds": runtime.retry_max_backoff_seconds,

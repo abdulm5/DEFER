@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import random
@@ -23,7 +24,9 @@ class APIInferenceConfig:
     timeout_seconds: int = 60
     auth_mode: str = "bearer"
     api_key_header: str = "api-key"
+    extra_headers: dict[str, str] | None = None
     query_params: dict[str, str] | None = None
+    extra_body: dict[str, Any] | None = None
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0
     retry_max_backoff_seconds: float = 8.0
@@ -132,6 +135,8 @@ class OpenAIChatPolicy:
             headers[self.inference.api_key_header] = self.api_key
         else:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        for key, value in (self.inference.extra_headers or {}).items():
+            headers[str(key)] = str(value)
         return headers
 
     def _register_usage(self, data: dict[str, Any]) -> None:
@@ -141,6 +146,12 @@ class OpenAIChatPolicy:
         prompt_tokens = usage.get("prompt_tokens")
         completion_tokens = usage.get("completion_tokens")
         total_tokens = usage.get("total_tokens")
+        if prompt_tokens is None:
+            prompt_tokens = usage.get("input_tokens")
+        if completion_tokens is None:
+            completion_tokens = usage.get("output_tokens")
+        if total_tokens is None and isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+            total_tokens = prompt_tokens + completion_tokens
         if isinstance(prompt_tokens, int):
             self.prompt_tokens_total += prompt_tokens
         if isinstance(completion_tokens, int):
@@ -152,16 +163,32 @@ class OpenAIChatPolicy:
         return status_code == 429 or 500 <= status_code < 600
 
     def _invoke(self, user_prompt: str) -> str:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": self.inference.temperature,
-            "top_p": self.inference.top_p,
-            "max_tokens": self.inference.max_new_tokens,
-        }
+        path = urlsplit(self.base_url).path
+        uses_anthropic_messages = path.endswith("/anthropic/v1/messages")
+        if uses_anthropic_messages:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "temperature": self.inference.temperature,
+                "max_tokens": self.inference.max_new_tokens,
+                "stream": False,
+            }
+            if self.system_prompt:
+                payload["system"] = self.system_prompt
+        else:
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": self.inference.temperature,
+                "top_p": self.inference.top_p,
+                "max_tokens": self.inference.max_new_tokens,
+            }
+        if self.inference.extra_body:
+            for key, value in self.inference.extra_body.items():
+                payload[key] = copy.deepcopy(value)
         url = self._compose_url()
         max_attempts = max(1, int(self.inference.max_retries) + 1)
         request_data = json.dumps(payload).encode("utf-8")
@@ -182,7 +209,8 @@ class OpenAIChatPolicy:
                 self._register_usage(data)
                 choices = data.get("choices", [])
                 if not choices:
-                    return ""
+                    content = data.get("content")
+                    return self._extract_content(content)
                 message = choices[0].get("message", {})
                 return self._extract_content(message.get("content", ""))
             except urllib.error.HTTPError as exc:
@@ -239,7 +267,9 @@ class OpenAIChatPolicy:
             "base_url": self.base_url,
             "auth_mode": self.inference.auth_mode,
             "api_key_header": self.inference.api_key_header,
+            "extra_headers": self.inference.extra_headers or {},
             "query_params": self.inference.query_params or {},
+            "extra_body": self.inference.extra_body or {},
             "total_decisions": self.total_decisions,
             "parse_failures": self.parse_failures,
             "api_errors": self.api_errors,

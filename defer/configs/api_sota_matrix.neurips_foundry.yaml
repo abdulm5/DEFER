@@ -1,0 +1,116 @@
+# NeurIPS-facing DEFER API SOTA matrix (Azure Foundry)
+#
+# Fill these before running:
+# - Replace FOUNDRY endpoint placeholder in each model `base_url`.
+# - Set env var in your shell: export AZURE_FOUNDRY_API_KEY=...
+#
+# Notes:
+# - This runner expects an OpenAI-compatible Chat Completions endpoint.
+# - Keep `sampling_seed` fixed across models for fairness.
+
+defaults:
+  variants: test_run_qwen25/data/variant_tasks.jsonl
+  split: test
+  repeats: 3
+  seed: 42
+  sampling_seed: 42
+  max_scenarios: 1000
+
+  include_baselines:
+    - runtime_verification_only
+  fallback_policy: runtime_verification_only
+
+  max_new_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+  timeout_seconds: 60
+
+  auth_mode: api_key
+  api_key_header: api-key
+  query_params:
+    api-version: "2024-10-21"
+
+  max_retries: 3
+  retry_backoff_seconds: 1.0
+  retry_max_backoff_seconds: 8.0
+
+  bootstrap_resamples: 5000
+  min_episodes_per_cell: 100
+  strict_coverage: false
+
+models:
+  # US / frontier dense anchors
+  - id: gpt_54
+    model: gpt-5.4
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: gpt54_zero_shot
+    prompted_policy_name: prompted_deferral
+
+  - id: gpt_54_mini
+    model: gpt-5.4-mini
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: gpt54mini_zero_shot
+    prompted_policy_name: prompted_deferral
+
+  # US / MoE architecture anchor
+  - id: llama4_maverick_17b_128e
+    model: Llama-4-Maverick-17B-128E-Instruct-FP8
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: llama4maverick_zero_shot
+    prompted_policy_name: prompted_deferral
+
+  # China / frontier + MoE coverage
+  - id: deepseek_v32
+    model: DeepSeek-V3.2
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: deepseekv32_zero_shot
+    prompted_policy_name: prompted_deferral
+
+  - id: qwen35_35b_a3b
+    model: qwen-qwen3.5-35b-a3b
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: qwen35_35b_zero_shot
+    prompted_policy_name: prompted_deferral
+
+  - id: qwen35_9b
+    model: qwen-qwen3.5-9b
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: qwen35_9b_zero_shot
+    prompted_policy_name: prompted_deferral
+
+  # Europe / dense + MoE coverage
+  - id: mistral_large3
+    model: Mistral-Large-3
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: mistral_large3_zero_shot
+    prompted_policy_name: prompted_deferral
+
+  - id: mixtral_8x22b
+    model: mistralai-Mixtral-8x22B-Instruct-v0-1
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1/chat/completions
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    run_zero_shot: true
+    run_prompted_deferral: true
+    zero_shot_policy_name: mixtral8x22b_zero_shot
+    prompted_policy_name: prompted_deferral

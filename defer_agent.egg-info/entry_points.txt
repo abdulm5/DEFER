@@ -1,18 +1,24 @@
 [console_scripts]
+defer-adversarial-eval = scripts.run_adversarial_eval:main
+defer-analyze-human-eval = scripts.analyze_human_eval:main
 defer-audit-success-pairs = scripts.audit_success_pairs:main
 defer-build-pairs = scripts.build_preference_pairs:main
 defer-build-success-pairs = scripts.build_success_preference_pairs:main
 defer-build-training-data = scripts.build_training_datasets:main
+defer-check-paper-integrity = scripts.check_paper_integrity:main
 defer-evaluate = scripts.evaluate_metrics:main
 defer-generalization-splits = scripts.create_generalization_splits:main
 defer-generate-seeds = scripts.generate_seed_tasks:main
 defer-generate-variants = scripts.generate_variants:main
 defer-paper-collect = scripts.run_paper_data_collection:main
+defer-prepare-human-eval = scripts.prepare_human_eval:main
 defer-reproduce = scripts.reproduce:main
 defer-run-api-eval = scripts.run_api_eval:main
+defer-run-api-sota-matrix = scripts.run_api_sota_matrix:main
 defer-run-baselines = scripts.run_baselines:main
 defer-run-checkpoint-eval = scripts.run_checkpoint_eval:main
 defer-run-checkpoint-seed-sweep = scripts.run_checkpoint_seed_sweep:main
 defer-seed-sweep = scripts.run_seed_sweep:main
+defer-theory-comparison = scripts.compute_theory_comparison:main
 defer-train-dpo = scripts.train_dpo:main
 defer-train-sft = scripts.train_sft:main

@@ -12,9 +12,12 @@ Requires-Dist: pyyaml==6.0.2
 Provides-Extra: train
 Requires-Dist: torch==2.3.1; extra == "train"
 Requires-Dist: transformers==4.44.2; extra == "train"
+Requires-Dist: accelerate==0.33.0; extra == "train"
 Requires-Dist: datasets==2.20.0; extra == "train"
 Requires-Dist: peft==0.12.0; extra == "train"
 Requires-Dist: trl==0.10.1; extra == "train"
+Requires-Dist: bitsandbytes>=0.43.0; extra == "train"
+Requires-Dist: rich==13.7.1; extra == "train"
 Provides-Extra: dev
 Requires-Dist: pytest==8.3.2; extra == "dev"
 Requires-Dist: ruff==0.6.4; extra == "dev"
@@ -69,7 +72,7 @@ python -m scripts.run_paper_data_collection \
   --tasks-per-domain 300 \
   --baseline-repeats 3 \
   --seed 42 \
-  --max-scenarios 2000 \
+  --max-scenarios 3000 \
   --baseline-bootstrap-resamples 2000 \
   --sweep-repeats 5 \
   --sweep-bootstrap-resamples 10000
@@ -82,6 +85,9 @@ Run the full training + checkpoint-eval + holdout suite with one command:
 ```bash
 RUN_DIR=artifacts/final_run_v1 CLEAN_OLD=1 BASE_MODEL=Qwen/Qwen2.5-1.5B-Instruct \
   ./scripts/run_final_data_collection.sh
+
+# Optional split override (defaults: BASELINE_SPLIT=train, EVAL_SPLIT=test)
+# BASELINE_SPLIT=train EVAL_SPLIT=test ./scripts/run_final_data_collection.sh
 ```
 
 Optional API baseline:
@@ -90,16 +96,28 @@ Optional API baseline:
 OPENAI_API_KEY=... RUN_API_BASELINE=1 ./scripts/run_final_data_collection.sh
 ```
 
-OpenRouter example:
+Azure Foundry / Azure OpenAI example:
 
 ```bash
-OPENROUTER_API_KEY=... \
+AZURE_OPENAI_API_KEY=... \
 RUN_API_BASELINE=1 \
-API_KEY_ENV=OPENROUTER_API_KEY \
-API_BASE_URL=https://openrouter.ai/api/v1/chat/completions \
-API_MODEL=openai/gpt-4o \
+API_KEY_ENV=AZURE_OPENAI_API_KEY \
+API_AUTH_MODE=api_key \
+API_KEY_HEADER=api-key \
+API_BASE_URL=https://YOUR-RESOURCE.openai.azure.com/openai/v1/chat/completions \
+API_QUERY_PARAM=api-version=2024-10-21 \
+API_MODEL=gpt-4o \
 API_POLICY_NAME=frontier_gpt4o_zero_shot \
 ./scripts/run_final_data_collection.sh
+```
+
+Supplementary parallel Azure SOTA matrix:
+
+```bash
+python -m scripts.run_api_sota_matrix \
+  --config defer/configs/api_sota_matrix.example.yaml \
+  --output-root artifacts/final_run_v1/api_sota \
+  --workers 2
 ```
 
 Paper run (Llama 3.1 8B):
@@ -129,6 +147,7 @@ Three scripts support post-training:
 - `python -m scripts.run_checkpoint_eval --help`
 - `python -m scripts.run_checkpoint_seed_sweep --help`
 - `python -m scripts.run_api_eval --help` (frontier zero-shot API baseline)
+- `python -m scripts.run_api_sota_matrix --help` (parallel supplementary API model matrix)
 
 Preference-pair generation (DEFER-targeted by default):
 
@@ -146,6 +165,7 @@ Checkpoint evaluation bridge:
 - `run_checkpoint_eval` evaluates real model checkpoints in-loop with the simulator.
 - `run_checkpoint_seed_sweep` runs 5+3 seed sweeps for checkpoint policies via `{seed}` path templates.
 - `run_api_eval` runs OpenAI-compatible API models in-loop (same action contract, fallback instrumentation).
+- `run_api_sota_matrix` runs supplementary multi-model API evals in parallel and writes matrix manifests.
 - Checkpoint eval writes `fallback_metrics.csv`; metric tables surface `fallback_rate` for interpretation gating.
 
 ## Reproducibility commitments

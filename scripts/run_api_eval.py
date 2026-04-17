@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -106,7 +107,9 @@ def run(
     timeout_seconds: int = 60,
     auth_mode: str = "bearer",
     api_key_header: str = "api-key",
+    extra_headers: dict[str, str] | None = None,
     query_params: dict[str, str] | None = None,
+    extra_body: dict[str, object] | None = None,
     max_retries: int = 3,
     retry_backoff_seconds: float = 1.0,
     retry_max_backoff_seconds: float = 8.0,
@@ -173,7 +176,9 @@ def run(
                 timeout_seconds=timeout_seconds,
                 auth_mode=auth_mode,
                 api_key_header=api_key_header,
+                extra_headers=extra_headers,
                 query_params=query_params,
+                extra_body=extra_body,
                 max_retries=max_retries,
                 retry_backoff_seconds=retry_backoff_seconds,
                 retry_max_backoff_seconds=retry_max_backoff_seconds,
@@ -246,7 +251,9 @@ def run(
                 "base_url": base_url,
                 "auth_mode": auth_mode,
                 "api_key_header": api_key_header,
+                "extra_headers": extra_headers or {},
                 "query_params": query_params or {},
+                "extra_body": extra_body or {},
                 "max_new_tokens": max_new_tokens,
                 "temperature": temperature,
                 "top_p": top_p,
@@ -290,10 +297,25 @@ def main() -> None:
     parser.add_argument("--auth-mode", type=str, choices=["bearer", "api_key"], default="bearer")
     parser.add_argument("--api-key-header", type=str, default="api-key")
     parser.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        help="Repeatable. Format key=value. Appended as HTTP headers.",
+    )
+    parser.add_argument(
         "--query-param",
         action="append",
         default=[],
         help="Repeatable. Format key=value. Appended as query parameters to --base-url.",
+    )
+    parser.add_argument(
+        "--extra-body-json",
+        type=str,
+        default="",
+        help=(
+            "Optional JSON object merged into each API request payload. "
+            "Example: '{\"thinking\":{\"type\":\"disabled\"}}'"
+        ),
     )
     parser.add_argument("--domains", type=str, default="")
     parser.add_argument("--include-delay-mechanisms", type=str, default="")
@@ -322,7 +344,11 @@ def main() -> None:
         {m.strip() for m in args.exclude_delay_mechanisms.split(",") if m.strip()} or None
     )
     include_baselines = [x.strip() for x in args.include_baselines.split(",") if x.strip()]
+    extra_headers = _parse_query_params(args.header)
     query_params = _parse_query_params(args.query_param)
+    extra_body = json.loads(args.extra_body_json) if args.extra_body_json else None
+    if extra_body is not None and not isinstance(extra_body, dict):
+        raise ValueError("--extra-body-json must decode to a JSON object.")
     run(
         variants=args.variants,
         output_dir=args.output_dir,
@@ -337,7 +363,9 @@ def main() -> None:
         base_url=args.base_url,
         auth_mode=args.auth_mode,
         api_key_header=args.api_key_header,
+        extra_headers=extra_headers,
         query_params=query_params,
+        extra_body=extra_body,
         domains=domains,
         include_delay_mechanisms=include_delay_mechanisms,
         exclude_delay_mechanisms=exclude_delay_mechanisms,
